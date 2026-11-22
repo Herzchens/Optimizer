@@ -25,7 +25,8 @@ class OptimizerCommand(
     private val circuitBreaker: CircuitBreaker,
     private val counters: Counters,
     private val timing: SampledTiming,
-    private val validator: CompatibilityValidator
+    private val validator: CompatibilityValidator,
+    private val wildToolsBridge: itzherzchen.optimizer.wildtools.WildToolsBridge? = null
 ) : CommandExecutor, TabCompleter {
 
     override fun onCommand(
@@ -162,6 +163,7 @@ class OptimizerCommand(
         val operator = sender.name
         modeController.disarm("Manual operator request via command", operator)
         circuitBreaker.trip(ModuleType.GLOBAL, "Operator requested disarm via command")
+        wildToolsBridge?.disarm("Operator requested disarm via command")
         sender.sendMessage(Component.text("[Optimizer] EMERGENCY DISARM EXECUTED. Mode permanently set to DISARMED_RESTART_REQUIRED.", NamedTextColor.RED))
         sender.sendMessage(Component.text("[Optimizer] All fast paths are disabled. A clean server restart is required to re-evaluate.", NamedTextColor.RED))
     }

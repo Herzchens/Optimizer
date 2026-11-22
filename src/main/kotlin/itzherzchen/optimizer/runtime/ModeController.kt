@@ -18,12 +18,17 @@ class ModeController(
     private val currentMode = AtomicReference(initialMode)
     private val disarmReason = AtomicReference<String?>(null)
     private val isBootPhase = AtomicReference(true)
+    private val disarmListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
 
     val mode: OperatingMode
         get() = currentMode.get()
 
     val reason: String?
         get() = disarmReason.get()
+
+    fun addDisarmListener(listener: () -> Unit) {
+        disarmListeners.add(listener)
+    }
 
     fun markBootComplete() {
         isBootPhase.set(false)
@@ -53,6 +58,7 @@ class ModeController(
                 logger?.info("[Optimizer] Mode transition: $current -> $newMode (reason: $transitionReason)")
                 if (newMode == OperatingMode.DISARMED_RESTART_REQUIRED) {
                     disarmReason.set(transitionReason)
+                    notifyDisarmListeners()
                 }
                 return true
             }
@@ -67,6 +73,17 @@ class ModeController(
         logger?.severe("[Optimizer] EMERGENCY DISARM triggered by $operator: $disarmReasonText")
         disarmReason.set("[$operator] $disarmReasonText")
         currentMode.set(OperatingMode.DISARMED_RESTART_REQUIRED)
+        notifyDisarmListeners()
         return true
+    }
+
+    private fun notifyDisarmListeners() {
+        for (listener in disarmListeners) {
+            try {
+                listener()
+            } catch (t: Throwable) {
+                logger?.log(java.util.logging.Level.SEVERE, "[Optimizer] Error in disarm listener", t)
+            }
+        }
     }
 }

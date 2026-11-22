@@ -75,6 +75,9 @@ class CircuitBreaker(
         return firstTrip
     }
 
+    fun trip(reason: String, throwable: Throwable? = null): Boolean =
+        trip(ModuleType.GLOBAL, reason, throwable)
+
     fun resetForTesting() {
         for (module in ModuleType.values()) {
             trippedModules[module]?.set(false)

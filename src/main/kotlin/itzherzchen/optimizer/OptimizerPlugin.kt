@@ -5,9 +5,13 @@ import itzherzchen.optimizer.command.OptimizerCommand
 import itzherzchen.optimizer.config.OptimizerConfig
 import itzherzchen.optimizer.observe.Counters
 import itzherzchen.optimizer.observe.SampledTiming
+import itzherzchen.optimizer.runtime.ActionContextStack
 import itzherzchen.optimizer.runtime.CircuitBreaker
 import itzherzchen.optimizer.runtime.ModeController
 import itzherzchen.optimizer.runtime.OperatingMode
+import itzherzchen.optimizer.wildtools.CuboidActionTracker
+import itzherzchen.optimizer.wildtools.SyntheticListenerInstaller
+import itzherzchen.optimizer.wildtools.WildToolsBridge
 import org.bukkit.plugin.java.JavaPlugin
 
 /**
@@ -36,6 +40,18 @@ class OptimizerPlugin : JavaPlugin() {
     lateinit var compatibilityValidator: CompatibilityValidator
         private set
 
+    lateinit var actionContextStack: ActionContextStack
+        private set
+
+    lateinit var actionTracker: CuboidActionTracker
+        private set
+
+    lateinit var listenerInstaller: SyntheticListenerInstaller
+        private set
+
+    lateinit var wildToolsBridge: WildToolsBridge
+        private set
+
     override fun onLoad() {
         val version = try { pluginMeta.version } catch (_: Throwable) { @Suppress("DEPRECATION") description.version }
         logger.info("[Optimizer] Loading Optimizer plugin v$version by itzherzchen...")
@@ -54,7 +70,29 @@ class OptimizerPlugin : JavaPlugin() {
         counters = Counters()
         timing = SampledTiming(optimizerConfig.timingSampleRate)
 
-        // 3. Compatibility & Fingerprint Validator
+        // 3. Action Context & WildTools Containment Machinery
+        actionContextStack = ActionContextStack(circuitBreaker, counters, logger)
+        actionTracker = CuboidActionTracker(actionContextStack, modeController, circuitBreaker, counters, timing, logger)
+        listenerInstaller = SyntheticListenerInstaller(actionContextStack, modeController, circuitBreaker, counters, logger)
+        wildToolsBridge = WildToolsBridge(
+            this,
+            optimizerConfig,
+            modeController,
+            circuitBreaker,
+            counters,
+            actionContextStack,
+            actionTracker,
+            listenerInstaller,
+            logger
+        )
+        wildToolsBridge.initialize()
+
+        // Automatically disarm WildToolsBridge whenever ModeController transitions to DISARMED_RESTART_REQUIRED
+        modeController.addDisarmListener {
+            wildToolsBridge.disarm("Automatic disarm via ModeController")
+        }
+
+        // 4. Compatibility & Fingerprint Validator
         compatibilityValidator = CompatibilityValidator(
             optimizerConfig,
             modeController,
@@ -62,13 +100,14 @@ class OptimizerPlugin : JavaPlugin() {
             logger
         )
 
-        // 4. Command Registration
+        // 5. Command Registration
         val cmd = OptimizerCommand(
             modeController,
             circuitBreaker,
             counters,
             timing,
-            compatibilityValidator
+            compatibilityValidator,
+            wildToolsBridge
         )
         val pluginCmd = getCommand("optimizer")
         if (pluginCmd != null) {
@@ -78,12 +117,18 @@ class OptimizerPlugin : JavaPlugin() {
             logger.severe("[Optimizer] Failed to find registered command 'optimizer' in plugin.yml!")
         }
 
-        // 5. Initial Boot Validation
+        // 6. Initial Boot Validation & Safe Hook Installation
         val validationReport = compatibilityValidator.runValidation()
         if (validationReport.isOverallCompatible) {
             val targetMode = if (optimizerConfig.configuredMode == OperatingMode.ACTIVE) {
-                // In Phase A/B bootstrap, active fast paths are not yet hooked, safe observe/validated
-                OperatingMode.VALIDATED
+                // If operator configured ACTIVE, attempt boot-time hook installation
+                val hooked = wildToolsBridge.installHooks(validationReport.listenerCensusResult)
+                if (hooked) {
+                    OperatingMode.ACTIVE
+                } else {
+                    logger.warning("[Optimizer] WildTools hook installation failed. Falling back to VALIDATED mode.")
+                    OperatingMode.VALIDATED
+                }
             } else {
                 validationReport.recommendedMode
             }
@@ -103,6 +148,14 @@ class OptimizerPlugin : JavaPlugin() {
         logger.info("[Optimizer] Disabling Optimizer plugin...")
 
         // Fail-closed emergency disarm on plugin disable
+        if (::wildToolsBridge.isInitialized) {
+            wildToolsBridge.disarm("Plugin onDisable lifecycle invoked")
+        }
+
+        if (::actionContextStack.isInitialized) {
+            actionContextStack.clear()
+        }
+
         if (::modeController.isInitialized) {
             modeController.disarm("Plugin onDisable lifecycle invoked", "SYSTEM")
         }
