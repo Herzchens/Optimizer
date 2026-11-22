@@ -1,0 +1,16 @@
+name: Optimizer
+main: itzherzchen.optimizer.OptimizerPlugin
+version: 0.1.0-SNAPSHOT
+api-version: '1.21.4'
+author: itzherzchen
+depend:
+  - WildTools
+  - SuperiorSkyblock2
+commands:
+  optimizer:
+    aliases: [hpg]
+    description: Optimizer diagnostics and emergency disarm
+    permission: optimizer.admin
+permissions:
+  optimizer.admin:
+    default: op

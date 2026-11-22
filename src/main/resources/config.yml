@@ -1,0 +1,16 @@
+# Optimizer Configuration
+# Modes: OBSERVE, ACTIVE
+# Note: ACTIVE requires explicit boot configuration and a clean server start.
+mode: OBSERVE
+
+modules:
+  stacked-fast-reject: false
+  block-accounting-fast-path: false
+
+pins:
+  wildtools-sha256: "dd9ca6393ab5824a4e00def7846697770e4bb546dbf79e8d15957acd968c829e"
+  superiorskyblock-sha256: "c7fb750ee60078175384baf4afcbde4f9fa066569bf045f516cefff7e6872168"
+  minecraft-version: "1.21.4"
+
+# Sample 1 out of every N cuboid actions (e.g. 64) for latency profiling without per-block overhead
+timing-sample-rate: 64
