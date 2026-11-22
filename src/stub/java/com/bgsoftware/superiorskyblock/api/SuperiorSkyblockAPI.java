@@ -5,21 +5,28 @@ import com.bgsoftware.superiorskyblock.api.handlers.KeysManager;
 import com.bgsoftware.superiorskyblock.api.handlers.StackedBlocksManager;
 
 public final class SuperiorSkyblockAPI {
+    private static SuperiorSkyblock plugin;
+
     private SuperiorSkyblockAPI() {}
 
     public static SuperiorSkyblock getSuperiorSkyblock() {
-        return null;
+        return plugin;
+    }
+
+    public static void setPluginInstance(SuperiorSkyblock pluginInstance) {
+        plugin = pluginInstance;
     }
 
     public static GridManager getGrid() {
-        return null;
+        return plugin == null ? null : plugin.getGrid();
     }
 
     public static StackedBlocksManager getStackedBlocks() {
-        return null;
+        return plugin == null ? null : plugin.getStackedBlocks();
     }
 
     public static KeysManager getKeys() {
-        return null;
+        return plugin == null ? null : plugin.getKeys();
     }
 }
+

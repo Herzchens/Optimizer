@@ -46,6 +46,12 @@ class OptimizerPlugin : JavaPlugin() {
     lateinit var actionTracker: CuboidActionTracker
         private set
 
+    lateinit var superiorBridge: itzherzchen.optimizer.superior.SuperiorBridge
+        private set
+
+    lateinit var stackedFastReject: itzherzchen.optimizer.superior.StackedFastReject
+        private set
+
     lateinit var listenerInstaller: SyntheticListenerInstaller
         private set
 
@@ -72,8 +78,24 @@ class OptimizerPlugin : JavaPlugin() {
 
         // 3. Action Context & WildTools Containment Machinery
         actionContextStack = ActionContextStack(circuitBreaker, counters, logger)
+        superiorBridge = itzherzchen.optimizer.superior.SuperiorBridge(logger)
+        stackedFastReject = itzherzchen.optimizer.superior.StackedFastReject(
+            optimizerConfig,
+            modeController,
+            circuitBreaker,
+            actionContextStack,
+            counters,
+            logger
+        )
         actionTracker = CuboidActionTracker(actionContextStack, modeController, circuitBreaker, counters, timing, logger)
-        listenerInstaller = SyntheticListenerInstaller(actionContextStack, modeController, circuitBreaker, counters, logger)
+        listenerInstaller = SyntheticListenerInstaller(
+            actionContextStack,
+            modeController,
+            circuitBreaker,
+            counters,
+            logger,
+            stackedFastReject
+        )
         wildToolsBridge = WildToolsBridge(
             this,
             optimizerConfig,

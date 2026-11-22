@@ -50,7 +50,8 @@ class SyntheticListenerInstaller(
     private val modeController: ModeController,
     private val circuitBreaker: CircuitBreaker,
     private val counters: Counters,
-    private val logger: Logger? = null
+    private val logger: Logger? = null,
+    var stackedFastReject: itzherzchen.optimizer.superior.StackedFastReject? = null
 ) {
     @Volatile
     var isInstalled: Boolean = false
@@ -136,7 +137,8 @@ class SyntheticListenerInstaller(
                 modeController = modeController,
                 circuitBreaker = circuitBreaker,
                 counters = counters,
-                logger = logger
+                logger = logger,
+                stackedFastReject = stackedFastReject
             )
 
             val wrapMonitor = SyntheticBreakWrapper(

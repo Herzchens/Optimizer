@@ -6,6 +6,7 @@ import itzherzchen.optimizer.runtime.CircuitBreaker
 import itzherzchen.optimizer.runtime.ModeController
 import itzherzchen.optimizer.runtime.ModuleType
 import itzherzchen.optimizer.runtime.OperatingMode
+import itzherzchen.optimizer.superior.StackedFastReject
 import org.bukkit.Bukkit
 import org.bukkit.event.Event
 import org.bukkit.event.EventException
@@ -44,7 +45,8 @@ class SyntheticBreakWrapper(
         } catch (_: Throwable) {
             true
         }
-    }
+    },
+    var stackedFastReject: StackedFastReject? = null
 ) : EventExecutor {
 
     @Volatile
@@ -73,15 +75,7 @@ class SyntheticBreakWrapper(
 
         // Wrapper pre-delegation bookkeeping
         try {
-            val currentMode = modeController.mode
-            val isGlobalTripped = circuitBreaker.isTripped(ModuleType.GLOBAL)
-
-            if (passthroughOnly || currentMode != OperatingMode.ACTIVE || isGlobalTripped) {
-                recordObservation(event)
-            } else {
-                // ACTIVE mode handling for future phases (Phase D/E)
-                recordObservation(event)
-            }
+            recordObservation(event)
         } catch (t: Throwable) {
             counters.circuitTrips.increment()
             logger?.log(
@@ -94,6 +88,24 @@ class SyntheticBreakWrapper(
                 "Unexpected exception in SyntheticBreakWrapper ($type): ${t.message}",
                 t
             )
+            callOriginal(event)
+            return
+        }
+
+        val currentMode = modeController.mode
+        val isGlobalTripped = circuitBreaker.isTripped(ModuleType.GLOBAL)
+
+        if (passthroughOnly || currentMode != OperatingMode.ACTIVE || isGlobalTripped) {
+            callOriginal(event)
+            return
+        }
+
+        if (type == SyntheticCallbackType.STACKED_BLOCKS) {
+            val fastReject = stackedFastReject
+            if (fastReject != null) {
+                fastReject.handle(event, original)
+                return
+            }
         }
 
         // Delegate to original callback exactly once.
@@ -122,3 +134,4 @@ class SyntheticBreakWrapper(
         }
     }
 }
+
