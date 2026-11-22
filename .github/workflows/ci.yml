@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Repository Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Git diff check
+        run: git diff --check
+
+      - name: Verify forbidden tracked files
+        run: |
+          set -e
+          echo "Checking for tracked local_* files..."
+          LOCAL_FILES=$(git ls-files 'local_*' '**/local_*' || true)
+          if [ -n "$LOCAL_FILES" ]; then
+            echo "Error: Found tracked local_* files:"
+            echo "$LOCAL_FILES"
+            exit 1
+          fi
+
+          echo "Checking for tracked proprietary JAR files..."
+          TRACKED_JARS=$(git ls-files '*.jar' ':!gradle/wrapper/gradle-wrapper.jar' || true)
+          if [ -n "$TRACKED_JARS" ]; then
+            echo "Error: Found tracked proprietary JAR files:"
+            echo "$TRACKED_JARS"
+            exit 1
+          fi
+
+      - name: Basic repository integrity checks
+        run: |
+          test -f README.md
+          test -f LICENSE
+          test -f .gitignore
