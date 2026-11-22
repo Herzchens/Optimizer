@@ -41,6 +41,8 @@ class ActionContext(
     var isClosed: Boolean = false
         private set
 
+    val chunkCoverage = ChunkCoverage()
+
     fun recordSyntheticBreak(event: BlockBreakEvent) {
         if (isClosed) return
         isConfirmed = true
@@ -50,6 +52,7 @@ class ActionContext(
     fun close() {
         if (isClosed) return
         isClosed = true
+        chunkCoverage.reset()
         rootEvent = null
         player = null
         tool = null

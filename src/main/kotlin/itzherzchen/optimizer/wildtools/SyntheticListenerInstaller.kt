@@ -51,7 +51,8 @@ class SyntheticListenerInstaller(
     private val circuitBreaker: CircuitBreaker,
     private val counters: Counters,
     private val logger: Logger? = null,
-    var stackedFastReject: itzherzchen.optimizer.superior.StackedFastReject? = null
+    var stackedFastReject: itzherzchen.optimizer.superior.StackedFastReject? = null,
+    var blockAccountingFastPath: itzherzchen.optimizer.superior.BlockAccountingFastPath? = null
 ) {
     @Volatile
     var isInstalled: Boolean = false
@@ -148,7 +149,8 @@ class SyntheticListenerInstaller(
                 modeController = modeController,
                 circuitBreaker = circuitBreaker,
                 counters = counters,
-                logger = logger
+                logger = logger,
+                blockAccountingFastPath = blockAccountingFastPath
             )
 
             val repS = RegisteredListener(

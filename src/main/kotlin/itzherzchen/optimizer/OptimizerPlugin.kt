@@ -52,6 +52,9 @@ class OptimizerPlugin : JavaPlugin() {
     lateinit var stackedFastReject: itzherzchen.optimizer.superior.StackedFastReject
         private set
 
+    lateinit var blockAccountingFastPath: itzherzchen.optimizer.superior.BlockAccountingFastPath
+        private set
+
     lateinit var listenerInstaller: SyntheticListenerInstaller
         private set
 
@@ -87,6 +90,14 @@ class OptimizerPlugin : JavaPlugin() {
             counters,
             logger
         )
+        blockAccountingFastPath = itzherzchen.optimizer.superior.BlockAccountingFastPath(
+            optimizerConfig,
+            modeController,
+            circuitBreaker,
+            actionContextStack,
+            counters,
+            logger = logger
+        )
         actionTracker = CuboidActionTracker(actionContextStack, modeController, circuitBreaker, counters, timing, logger)
         listenerInstaller = SyntheticListenerInstaller(
             actionContextStack,
@@ -94,7 +105,8 @@ class OptimizerPlugin : JavaPlugin() {
             circuitBreaker,
             counters,
             logger,
-            stackedFastReject
+            stackedFastReject,
+            blockAccountingFastPath
         )
         wildToolsBridge = WildToolsBridge(
             this,

@@ -46,7 +46,8 @@ class SyntheticBreakWrapper(
             true
         }
     },
-    var stackedFastReject: StackedFastReject? = null
+    var stackedFastReject: StackedFastReject? = null,
+    var blockAccountingFastPath: itzherzchen.optimizer.superior.BlockAccountingFastPath? = null
 ) : EventExecutor {
 
     @Volatile
@@ -104,6 +105,12 @@ class SyntheticBreakWrapper(
             val fastReject = stackedFastReject
             if (fastReject != null) {
                 fastReject.handle(event, original)
+                return
+            }
+        } else if (type == SyntheticCallbackType.ACCOUNTING) {
+            val accounting = blockAccountingFastPath
+            if (accounting != null) {
+                accounting.handle(event, original)
                 return
             }
         }
