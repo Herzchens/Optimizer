@@ -1,6 +1,7 @@
 package itzherzchen.optimizer.runtime
 
 import com.bgsoftware.wildtools.api.objects.tools.CuboidTool
+import org.bukkit.Location
 import org.bukkit.entity.Player
 import org.bukkit.event.block.BlockBreakEvent
 import java.util.concurrent.atomic.AtomicInteger
@@ -43,6 +44,11 @@ class ActionContext(
 
     val chunkCoverage = ChunkCoverage()
 
+    /**
+     * Action-local reusable Location object to eliminate per-block Location allocation on hot path.
+     */
+    val reusableLocation: Location = Location(null, 0.0, 0.0, 0.0)
+
     fun recordSyntheticBreak(event: BlockBreakEvent) {
         if (isClosed) return
         isConfirmed = true
@@ -53,6 +59,7 @@ class ActionContext(
         if (isClosed) return
         isClosed = true
         chunkCoverage.reset()
+        reusableLocation.world = null
         rootEvent = null
         player = null
         tool = null

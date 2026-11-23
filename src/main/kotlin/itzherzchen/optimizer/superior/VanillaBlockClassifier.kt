@@ -22,10 +22,11 @@ data class ClassificationResult(
  * Implements Plan.md Section 5.2:
  * - Accept only exact MaterialKey class (`rawKey.javaClass.name == targetClassName`).
  * - Match `globalKey == block.type.name`.
- * - Empty or null `subKey`.
+ * - Empty, null, or "0" `subKey`.
  * - Non-SPAWNER material (both Material.SPAWNER and material name contains 'SPAWNER').
  * - Any null, custom key, ItemsAdder key, spawner, exception, or nonstandard key -> original.
  * - Never normalizes unknown keys into vanilla keys.
+ * - Zero heap allocation per block on hot path via safeVanillaKey and isSpawner.
  */
 class VanillaBlockClassifier(
     private val targetClassName: String = DEFAULT_MATERIAL_KEY_CLASS_NAME,
@@ -37,48 +38,62 @@ class VanillaBlockClassifier(
         const val DEFAULT_MATERIAL_KEY_CLASS_NAME = "com.bgsoftware.superiorskyblock.core.key.types.MaterialKey"
     }
 
-    fun classify(block: Block): ClassificationResult {
-        // 1. Spawner gate
+    /**
+     * Spawner check without querying key or allocating objects.
+     */
+    fun isSpawner(material: Material): Boolean =
+        material == Material.SPAWNER || material.name.contains("SPAWNER")
+
+    /**
+     * Safe zero-allocation classification for the hot path.
+     * Returns the non-null Key if and only if the block is a strictly validated vanilla block.
+     * Returns null if spawner, custom key, ItemsAdder key, non-standard key, or on error.
+     */
+    fun safeVanillaKey(block: Block): Key? {
         val mat = block.type
-        if (mat == Material.SPAWNER || mat.name.contains("SPAWNER")) {
-            return ClassificationResult(ClassificationStatus.SPAWNER, null)
+        if (isSpawner(mat)) {
+            return null
         }
 
-        // 2. Query key via SuperiorSkyblock KeysManager
-        val rawKey: Any? = try {
+        val rawKey = try {
             keyProvider(block)
         } catch (_: Throwable) {
-            return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
+            null
+        } ?: return null
+
+        if (rawKey.javaClass.name != targetClassName) {
+            return null
         }
 
-        if (rawKey == null) {
-            return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
-        }
+        val key = rawKey as? Key ?: return null
 
-        // 3. Exact class equality: must be exactly MaterialKey, not a subclass or custom Key
-        val rawClassName = rawKey.javaClass.name
-        val isExact = rawClassName == targetClassName
-        if (!isExact) {
-            return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
-        }
-
-        val key = rawKey as? Key ?: return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
-
-        // 4. Strict member validation: globalKey must match block.type.name exactly.
-        // In SuperiorSkyblock2 b963, MaterialKey.of(Material, 0, BLOCK) sets durabilityAsString = "0".
-        // Therefore, safe vanilla keys have subKey as null, empty, or "0". Custom or legacy keys have other subKeys.
         val globalKey = key.globalKey
-        val subKey = key.subKey
-
         if (globalKey != mat.name) {
-            return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
+            return null
         }
 
+        val subKey = key.subKey
         val isSubKeyVanilla = subKey.isNullOrEmpty() || subKey == "0"
         if (!isSubKeyVanilla) {
-            return ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
+            return null
         }
 
-        return ClassificationResult(ClassificationStatus.SAFE_VANILLA, key)
+        return key
+    }
+
+    /**
+     * Backward-compatible result-allocating classification for tests or audit inspection.
+     */
+    fun classify(block: Block): ClassificationResult {
+        val mat = block.type
+        if (isSpawner(mat)) {
+            return ClassificationResult(ClassificationStatus.SPAWNER, null)
+        }
+        val key = safeVanillaKey(block)
+        return if (key != null) {
+            ClassificationResult(ClassificationStatus.SAFE_VANILLA, key)
+        } else {
+            ClassificationResult(ClassificationStatus.CUSTOM_OR_NONSTANDARD, null)
+        }
     }
 }

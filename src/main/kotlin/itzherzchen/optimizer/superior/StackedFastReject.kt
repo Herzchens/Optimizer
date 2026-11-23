@@ -10,7 +10,6 @@ import itzherzchen.optimizer.runtime.ModuleType
 import itzherzchen.optimizer.runtime.OperatingMode
 import org.bukkit.Bukkit
 import org.bukkit.block.Block
-import org.bukkit.event.EventException
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.plugin.RegisteredListener
 import java.util.logging.Level
@@ -41,7 +40,7 @@ class StackedFastReject(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            false
         }
     },
     private val stackedAmountProvider: (Block) -> Int = { block ->
@@ -58,7 +57,7 @@ class StackedFastReject(
      * Evaluates the synthetic BlockBreakEvent against the stacked blocks fast reject invariants.
      */
     fun handle(event: BlockBreakEvent, original: RegisteredListener) {
-        // 1. Thread check: Main thread invariant
+        // 1. Thread check: Main thread invariant (fail closed if unable to verify)
         if (!primaryThreadChecker()) {
             counters.circuitTrips.increment()
             logger?.severe(

@@ -99,6 +99,7 @@ class SeededActionPropertyTest {
 
         val world = mock(World::class.java)
         `when`(world.name).thenReturn("world")
+        `when`(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true)
         val player = mock(Player::class.java)
         val tool = mock(com.bgsoftware.wildtools.api.objects.tools.CuboidTool::class.java)
         val island = mock(Island::class.java)
@@ -304,6 +305,7 @@ class SeededActionPropertyTest {
             when (method.name) {
                 "getType" -> spec.material
                 "getX" -> spec.x
+                "getY" -> 64
                 "getZ" -> spec.z
                 "getWorld" -> world
                 "getLocation" -> blockLoc

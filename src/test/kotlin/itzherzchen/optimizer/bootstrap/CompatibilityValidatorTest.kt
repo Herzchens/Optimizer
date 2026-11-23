@@ -178,4 +178,60 @@ class CompatibilityValidatorTest {
         assertFalse(report.moduleBEligible, "Module B must be refused when transaction risk scan fails (unknown is not clean)")
         assertTrue(report.moduleBReason.contains("Refused due to transaction risk scan failure"))
     }
+
+    @Test
+    fun `unknown SSB internal callback at HIGHEST marks Module A refused while Module B is eligible`() {
+        val foreignAudit = itzherzchen.optimizer.superior.DispatcherAuditResult(
+            moduleAEligible = false,
+            moduleBEligible = true,
+            highestCallbacks = listOf("ForeignHighestListener"),
+            monitorCallbacks = listOf("SignsListener", "BlockChangesListener"),
+            discrepancies = listOf("Unexpected SSB callback at HIGHEST: ForeignHighestListener")
+        )
+
+        val validator = CompatibilityValidator(
+            config = config,
+            modeController = modeController,
+            counters = counters,
+            fingerprintProvider = { FingerprintResult(true, emptyList(), emptyList()) },
+            censusProvider = { createValidCensus() },
+            riskScannerProvider = { TransactionRiskReport(false, emptyList(), "No risk") },
+            dispatcherAuditorProvider = { foreignAudit }
+        )
+
+        val report = validator.runValidation()
+
+        assertTrue(report.isOverallCompatible)
+        assertFalse(report.moduleAEligible, "Module A must be refused when HIGHEST has foreign callback")
+        assertTrue(report.moduleAReason.contains("ForeignHighestListener"))
+        assertTrue(report.moduleBEligible, "Module B remains eligible when MONITOR composition is standard")
+    }
+
+    @Test
+    fun `unknown SSB internal callback at MONITOR marks Module B refused while Module A is eligible`() {
+        val foreignAudit = itzherzchen.optimizer.superior.DispatcherAuditResult(
+            moduleAEligible = true,
+            moduleBEligible = false,
+            highestCallbacks = listOf("StackedBlocksListener"),
+            monitorCallbacks = listOf("SignsListener", "BlockChangesListener", "ForeignMonitorListener"),
+            discrepancies = listOf("Unexpected SSB callback at MONITOR: ForeignMonitorListener")
+        )
+
+        val validator = CompatibilityValidator(
+            config = config,
+            modeController = modeController,
+            counters = counters,
+            fingerprintProvider = { FingerprintResult(true, emptyList(), emptyList()) },
+            censusProvider = { createValidCensus() },
+            riskScannerProvider = { TransactionRiskReport(false, emptyList(), "No risk") },
+            dispatcherAuditorProvider = { foreignAudit }
+        )
+
+        val report = validator.runValidation()
+
+        assertTrue(report.isOverallCompatible)
+        assertTrue(report.moduleAEligible, "Module A remains eligible")
+        assertFalse(report.moduleBEligible, "Module B must be refused when MONITOR has foreign callback")
+        assertTrue(report.moduleBReason.contains("ForeignMonitorListener"))
+    }
 }

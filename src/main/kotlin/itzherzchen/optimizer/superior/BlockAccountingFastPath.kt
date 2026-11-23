@@ -2,6 +2,7 @@ package itzherzchen.optimizer.superior
 
 import com.bgsoftware.superiorskyblock.api.SuperiorSkyblockAPI
 import com.bgsoftware.superiorskyblock.api.island.Island
+import com.bgsoftware.superiorskyblock.api.key.Key
 import itzherzchen.optimizer.config.OptimizerConfig
 import itzherzchen.optimizer.observe.Counters
 import itzherzchen.optimizer.runtime.ActionContextStack
@@ -16,7 +17,6 @@ import org.bukkit.Tag
 import org.bukkit.block.Block
 import org.bukkit.block.BlockFace
 import org.bukkit.block.data.type.Slab
-import org.bukkit.event.EventException
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.plugin.RegisteredListener
 import java.util.logging.Level
@@ -26,9 +26,10 @@ import java.util.logging.Logger
  * Module B — SSBBlockAccountingFastPath (Plan.md Section 5.2).
  *
  * Provides a guarded, fail-closed fast path for SuperiorSkyblock2 MONITOR accounting callbacks:
- * - Classification: Accept only exact MaterialKey with matching globalKey and empty subKey.
+ * - Classification: Accept only exact MaterialKey with matching globalKey and empty/zero subKey.
+ * - Zero Allocation on Hot Path: safeVanillaKey and action-local reusable Location.
  * - Spawner gate: All spawners bypass fast path and fall back to original callback.
- * - Sign gate: Block and its six orthogonal neighbors are inspected. Any sign bypasses fast path.
+ * - Sign gate: Block and its six orthogonal neighbors are inspected without loading unloaded neighbor chunks.
  * - Chunk coverage: Action-local tracker. First safe block in a chunk acts as anchor through original MONITOR callback.
  * - Subsequent safe blocks in covered chunk bypass redundant callback and invoke island.handleBlockBreak(key, amount, 3).
  * - Direct mutation invariant: If exception occurs during handleBlockBreak, NEVER retry original.
@@ -45,7 +46,7 @@ class BlockAccountingFastPath(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            false
         }
     },
     private val islandProvider: (Location) -> Island? = { loc ->
@@ -53,7 +54,7 @@ class BlockAccountingFastPath(
     },
     private val signChecker: (Material) -> Boolean = { material ->
         try {
-            Tag.ALL_SIGNS.isTagged(material)
+            Tag.ALL_SIGNS.isTagged(material) || material.name.contains("SIGN")
         } catch (_: Throwable) {
             // Standalone test / uninitialized Bukkit fallback: check material name
             material.name.contains("SIGN")
@@ -74,7 +75,7 @@ class BlockAccountingFastPath(
     )
 
     fun handle(event: BlockBreakEvent, original: RegisteredListener) {
-        // 1. Thread check
+        // 1. Thread check: Fail-closed on unable to verify primary thread
         if (!primaryThreadChecker()) {
             counters.circuitTrips.increment()
             logger?.severe(
@@ -109,10 +110,15 @@ class BlockAccountingFastPath(
 
         val block = event.block
 
-        // 3. Island check
+        // 3. Island check (using action-local reusable Location without per-block allocation)
         val island: Island?
         try {
-            island = islandProvider(block.location)
+            val loc = try {
+                block.getLocation(context.reusableLocation) ?: block.location
+            } catch (_: Throwable) {
+                block.location
+            }
+            island = islandProvider(loc)
         } catch (t: Throwable) {
             counters.circuitTrips.increment()
             counters.validationFailures.increment()
@@ -131,44 +137,70 @@ class BlockAccountingFastPath(
             return
         }
 
-        // 4. Sign gate: check block and 6 orthogonal neighbors
-        if (isSignOrNearSign(block)) {
+        // 4. Sign gate: check block and 6 orthogonal neighbors, avoiding loading unloaded neighbor chunks
+        val isSign: Boolean
+        try {
+            isSign = isSignOrNearSign(block)
+        } catch (t: Throwable) {
+            counters.signPassthroughs.increment()
+            callOriginal(original, event)
+            return
+        }
+        if (isSign) {
             counters.signPassthroughs.increment()
             callOriginal(original, event)
             return
         }
 
-        // 5. Vanilla block classification
-        val classification = classifier.classify(block)
-        when (classification.status) {
-            ClassificationStatus.SPAWNER -> {
-                counters.spawnerPassthroughs.increment()
-                callOriginal(original, event)
-                return
-            }
-            ClassificationStatus.CUSTOM_OR_NONSTANDARD -> {
-                counters.customPassthroughs.increment()
-                callOriginal(original, event)
-                return
-            }
-            ClassificationStatus.SAFE_VANILLA -> {
-                // Continue to chunk coverage evaluation
-            }
+        // 5. Spawner gate: zero-allocation spawner check
+        val isSpawner: Boolean
+        try {
+            isSpawner = classifier.isSpawner(block.type)
+        } catch (t: Throwable) {
+            counters.spawnerPassthroughs.increment()
+            callOriginal(original, event)
+            return
+        }
+        if (isSpawner) {
+            counters.spawnerPassthroughs.increment()
+            callOriginal(original, event)
+            return
         }
 
-        val key = classification.key
+        // 6. Vanilla block classification (zero allocation: safeVanillaKey returns Key? directly)
+        val key: Key?
+        try {
+            key = classifier.safeVanillaKey(block)
+        } catch (t: Throwable) {
+            counters.customPassthroughs.increment()
+            callOriginal(original, event)
+            return
+        }
         if (key == null) {
             counters.customPassthroughs.increment()
             callOriginal(original, event)
             return
         }
 
-        // 6. Chunk coverage evaluation
+        // 7. Chunk coverage evaluation
         val chunkX = block.x shr 4
         val chunkZ = block.z shr 4
         val world = block.world
 
-        val isCovered = context.chunkCoverage.isCovered(world, chunkX, chunkZ, island)
+        val isCovered: Boolean
+        try {
+            isCovered = context.chunkCoverage.isCovered(world, chunkX, chunkZ, island)
+        } catch (t: Throwable) {
+            counters.circuitTrips.increment()
+            counters.validationFailures.increment()
+            circuitBreaker.trip(
+                ModuleType.BLOCK_ACCOUNTING_FAST_PATH,
+                "Exception checking chunk coverage: ${t.message}",
+                t
+            )
+            callOriginal(original, event)
+            return
+        }
 
         if (!isCovered) {
             // Anchor path: first block in this chunk uses original MONITOR callback
@@ -176,15 +208,19 @@ class BlockAccountingFastPath(
 
             // Mark chunk covered ONLY after original succeeds uncancelled
             if (!event.isCancelled) {
-                val marked = context.chunkCoverage.markCovered(world, chunkX, chunkZ, island)
-                if (marked) {
-                    counters.monitorAnchors.increment()
+                try {
+                    val marked = context.chunkCoverage.markCovered(world, chunkX, chunkZ, island)
+                    if (marked) {
+                        counters.monitorAnchors.increment()
+                    }
+                } catch (_: Throwable) {
+                    // Ignore coverage marking exception post-call
                 }
             }
             return
         }
 
-        // 7. Fast path: subsequent block in covered chunk bypasses MONITOR callback
+        // 8. Fast path: subsequent block in covered chunk bypasses MONITOR callback
         val amount: Int
         try {
             amount = getBreakAmount(block)
@@ -232,9 +268,54 @@ class BlockAccountingFastPath(
             if (signChecker(block.type)) {
                 return true
             }
+
+            val world = block.world
+            val bx = block.x
+            val by = block.y
+            val bz = block.z
+            val blockChunkX = bx shr 4
+            val blockChunkZ = bz shr 4
+
+            val minY = try {
+                val h = world.minHeight
+                if (h == 0 && world.maxHeight == 0) -64 else h
+            } catch (_: Throwable) {
+                -64
+            }
+            val maxY = try {
+                val h = world.maxHeight
+                if (h <= 0) 320 else h
+            } catch (_: Throwable) {
+                320
+            }
+
             for (face in orthogonalFaces) {
-                val neighborType = block.getRelative(face).type
-                if (signChecker(neighborType)) {
+                val targetY = by + face.modY
+                if (targetY < minY || targetY >= maxY) {
+                    // Out-of-world vertical bounds: cannot be a valid sign
+                    continue
+                }
+
+                val targetX = bx + face.modX
+                val targetZ = bz + face.modZ
+                val targetChunkX = targetX shr 4
+                val targetChunkZ = targetZ shr 4
+
+                if (targetChunkX != blockChunkX || targetChunkZ != blockChunkZ) {
+                    val isLoaded = try {
+                        world.isChunkLoaded(targetChunkX, targetChunkZ)
+                    } catch (_: Throwable) {
+                        false
+                    }
+                    if (!isLoaded) {
+                        // Neighbor chunk across chunk border is not loaded!
+                        // Fail closed: do NOT synchronously load chunk, treat as sign/passthrough.
+                        return true
+                    }
+                }
+
+                val neighbor = block.getRelative(face)
+                if (signChecker(neighbor.type)) {
                     return true
                 }
             }

@@ -43,7 +43,7 @@ class SyntheticBreakWrapper(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            false
         }
     },
     var stackedFastReject: StackedFastReject? = null,
@@ -60,7 +60,7 @@ class SyntheticBreakWrapper(
             return
         }
 
-        // Invariant: Main-thread execution only
+        // Invariant: Main-thread execution only (fail-closed if unable to verify)
         if (!primaryThreadChecker()) {
             counters.circuitTrips.increment()
             logger?.severe(

@@ -27,13 +27,16 @@ class SyntheticListenerInstallerTest {
     private lateinit var stack: ActionContextStack
     private lateinit var installer: SyntheticListenerInstaller
 
+    private var isPrimaryThread = true
+
     @BeforeEach
     fun setup() {
+        isPrimaryThread = true
         modeController = ModeController(OperatingMode.OBSERVE)
         circuitBreaker = CircuitBreaker(modeController)
         counters = Counters()
-        stack = ActionContextStack(circuitBreaker, counters)
-        installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters)
+        stack = ActionContextStack(circuitBreaker, counters, primaryThreadChecker = { isPrimaryThread })
+        installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters, primaryThreadChecker = { isPrimaryThread })
     }
 
     private fun createRegisteredListener(pluginName: String, priority: EventPriority): RegisteredListener {

@@ -71,6 +71,7 @@ class BlockAccountingFastPathTest {
         )
         island = mock(Island::class.java)
         world = mock(World::class.java)
+        `when`(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true)
     }
 
     private fun createClassifier(keyProvider: (Block) -> Key?): VanillaBlockClassifier {
@@ -771,5 +772,60 @@ class BlockAccountingFastPathTest {
         verify(island, times(2)).handleBlockBreak(any(Key::class.java), eq(1), eq(3))
         assertEquals(2L, counters.monitorAnchors.sum())
         assertEquals(2L, counters.monitorFastPaths.sum())
+    }
+
+    @Test
+    fun `unloaded neighboring chunk sign gate refuses fast path without loading chunk and uses original callback`() {
+        pushContext()
+        val (origRL, mockExecutor) = createRegisteredListener()
+
+        // Neighbor chunk (1, 0) is unloaded
+        `when`(world.isChunkLoaded(1, 0)).thenReturn(false)
+
+        val fastPath = BlockAccountingFastPath(
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            actionContextStack = stack,
+            counters = counters,
+            classifier = createClassifier { TestKey(it.type.name) },
+            primaryThreadChecker = { isPrimaryThread },
+            islandProvider = { island }
+        )
+
+        val player = mock(Player::class.java)
+
+        // Block at chunk border x = 15, z = 5 (chunk 0, 0)
+        // Neighbor EAST is at x = 16 (chunk 1, 0, which is unloaded)
+        val block = mockBlock(material = Material.STONE, x = 15, y = 64, z = 5)
+        val event = BlockBreakEvent(block, player)
+
+        fastPath.handle(event, origRL)
+
+        // Must fail closed to original callback
+        verify(mockExecutor, times(1)).execute(eq(origRL.listener), eq(event))
+        verify(island, never()).handleBlockBreak(any(Key::class.java), anyInt(), anyInt())
+        assertEquals(1L, counters.signPassthroughs.sum(), "Unloaded neighbor chunk must be treated as sign passthrough")
+        assertEquals(0L, counters.monitorAnchors.sum())
+        assertEquals(0L, counters.monitorFastPaths.sum())
+
+        // Block relative EAST must NOT have been queried across the unloaded chunk boundary!
+        verify(block, never()).getRelative(BlockFace.EAST)
+    }
+
+    @Test
+    fun `safeVanillaKey classifies vanilla blocks directly with zero ClassificationResult allocation`() {
+        val classifier = VanillaBlockClassifier(
+            targetClassName = targetClassName,
+            keyProvider = { TestKey("STONE", "0") }
+        )
+
+        val block = mockBlock(material = Material.STONE, x = 10, y = 64, z = 10)
+        val key = classifier.safeVanillaKey(block)
+
+        assertNotNull(key, "Valid vanilla block must return non-null key directly")
+        assertEquals("STONE", key?.globalKey)
+        assertFalse(classifier.isSpawner(Material.STONE))
+        assertTrue(classifier.isSpawner(Material.SPAWNER))
     }
 }

@@ -81,6 +81,7 @@ class FaultInjectionMatrixTest {
         island = mock(Island::class.java)
         world = mock(World::class.java)
         `when`(world.name).thenReturn("world")
+        `when`(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true)
         player = mock(Player::class.java)
     }
 
@@ -97,6 +98,7 @@ class FaultInjectionMatrixTest {
         val block = mock(Block::class.java)
         `when`(block.type).thenReturn(material)
         `when`(block.x).thenReturn(10)
+        `when`(block.y).thenReturn(64)
         `when`(block.z).thenReturn(10)
         `when`(block.world).thenReturn(world)
         `when`(block.location).thenReturn(Location(world, 10.0, 64.0, 10.0))
@@ -141,7 +143,8 @@ class FaultInjectionMatrixTest {
                 targetClassName = FaultTestKey::class.java.name,
                 keyProvider = { FaultTestKey(Material.STONE.name) }
             ),
-            islandProvider = { island }
+            islandProvider = { island },
+            primaryThreadChecker = { isPrimary }
         )
 
         val (event, original) = createBreakEvent(Material.STONE)
@@ -178,7 +181,8 @@ class FaultInjectionMatrixTest {
             circuitBreaker = circuitBreaker,
             actionContextStack = stack,
             counters = counters,
-            islandProvider = { throw IllegalStateException("Island grid cache corrupted") }
+            islandProvider = { throw IllegalStateException("Island grid cache corrupted") },
+            primaryThreadChecker = { isPrimary }
         )
 
         val (event, original) = createBreakEvent(Material.STONE)
@@ -203,6 +207,7 @@ class FaultInjectionMatrixTest {
             actionContextStack = stack,
             counters = counters,
             islandProvider = { island },
+            primaryThreadChecker = { isPrimary },
             signChecker = { throw RuntimeException("Tag lookup error") }
         )
 
@@ -411,7 +416,8 @@ class FaultInjectionMatrixTest {
                 targetClassName = FaultTestKey::class.java.name,
                 keyProvider = { FaultTestKey(Material.STONE.name) }
             ),
-            islandProvider = { island }
+            islandProvider = { island },
+            primaryThreadChecker = { isPrimary }
         )
 
         val (firstEvent, firstOriginal) = createBreakEvent(Material.STONE)

@@ -26,14 +26,17 @@ class WildToolsBridgeTest {
     private lateinit var bridge: WildToolsBridge
     private lateinit var config: OptimizerConfig
 
+    private var isPrimaryThread = true
+
     @BeforeEach
     fun setup() {
+        isPrimaryThread = true
         modeController = ModeController(OperatingMode.OBSERVE)
         circuitBreaker = CircuitBreaker(modeController)
         counters = Counters()
-        stack = ActionContextStack(circuitBreaker, counters)
-        tracker = CuboidActionTracker(stack, modeController, circuitBreaker, counters)
-        installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters)
+        stack = ActionContextStack(circuitBreaker, counters, primaryThreadChecker = { isPrimaryThread })
+        tracker = CuboidActionTracker(stack, modeController, circuitBreaker, counters, primaryThreadChecker = { isPrimaryThread })
+        installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters, primaryThreadChecker = { isPrimaryThread })
         val plugin = mock(Plugin::class.java)
 
         config = OptimizerConfig(
@@ -54,7 +57,8 @@ class WildToolsBridgeTest {
             counters = counters,
             actionContextStack = stack,
             actionTracker = tracker,
-            listenerInstaller = installer
+            listenerInstaller = installer,
+            primaryThreadChecker = { isPrimaryThread }
         )
     }
 

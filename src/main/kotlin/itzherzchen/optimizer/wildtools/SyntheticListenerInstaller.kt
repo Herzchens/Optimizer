@@ -75,7 +75,7 @@ class SyntheticListenerInstaller(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            Bukkit.getServer() == null
         }
     }
 ) {

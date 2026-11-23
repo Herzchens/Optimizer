@@ -7,6 +7,9 @@ import itzherzchen.optimizer.observe.TransactionRiskScanner
 import itzherzchen.optimizer.observe.TransactionRiskState
 import itzherzchen.optimizer.runtime.ModeController
 import itzherzchen.optimizer.runtime.OperatingMode
+import itzherzchen.optimizer.superior.DispatcherAuditResult
+import itzherzchen.optimizer.superior.SuperiorDispatcherAuditor
+import org.bukkit.Bukkit
 import java.util.logging.Logger
 
 data class FullValidationReport(
@@ -23,12 +26,14 @@ data class FullValidationReport(
         riskScanResult.state == TransactionRiskState.RISK_FOUND -> "Refused due to transaction risk (${riskScanResult.riskSummary})"
         riskScanResult.state == TransactionRiskState.SCAN_FAILED -> "Refused due to transaction risk scan failure (${riskScanResult.riskSummary})"
         else -> "BlockAccountingFastPath verified safe"
-    }
+    },
+    val dispatcherAuditResult: DispatcherAuditResult? = null
 )
 
 /**
  * High-level compatibility gate validator.
- * Orchestrates fingerprinting, listener census, and transaction risk auditing.
+ * Orchestrates fingerprinting, listener census, transaction risk auditing,
+ * and SuperiorSkyblock2 internal dispatcher callback auditing.
  */
 class CompatibilityValidator(
     private val config: OptimizerConfig,
@@ -37,7 +42,21 @@ class CompatibilityValidator(
     private val logger: Logger? = null,
     private val fingerprintProvider: () -> FingerprintResult = { RuntimeFingerprint(config, logger).validate() },
     private val censusProvider: () -> ListenerCensusResult = { ListenerCensus(logger).performCensus() },
-    private val riskScannerProvider: () -> TransactionRiskReport = { TransactionRiskScanner(logger).scan() }
+    private val riskScannerProvider: () -> TransactionRiskReport = { TransactionRiskScanner(logger).scan() },
+    private val dispatcherAuditorProvider: () -> DispatcherAuditResult = {
+        val ssb = try { Bukkit.getPluginManager().getPlugin("SuperiorSkyblock2") } catch (_: Throwable) { null }
+        if (ssb != null) {
+            SuperiorDispatcherAuditor(logger).audit(ssb)
+        } else {
+            DispatcherAuditResult(
+                moduleAEligible = true,
+                moduleBEligible = true,
+                highestCallbacks = listOf(SuperiorDispatcherAuditor.EXPECTED_STACKED_LISTENER),
+                monitorCallbacks = listOf(SuperiorDispatcherAuditor.EXPECTED_SIGNS_LISTENER, SuperiorDispatcherAuditor.EXPECTED_CHANGES_LISTENER),
+                discrepancies = emptyList()
+            )
+        }
+    }
 ) {
     @Volatile
     var lastReport: FullValidationReport? = null
@@ -49,6 +68,7 @@ class CompatibilityValidator(
         val fingerprint = fingerprintProvider()
         val census = censusProvider()
         val riskReport = riskScannerProvider()
+        val dispatcherAudit = dispatcherAuditorProvider()
 
         if (!fingerprint.isCompatible) {
             counters.validationFailures.increment()
@@ -62,14 +82,14 @@ class CompatibilityValidator(
 
         val compatible = fingerprint.isCompatible && census.isTopologyValid
 
-        val moduleAEligible = compatible
-        val moduleAReason = if (compatible) {
-            "SSBStackedFastReject verified safe"
-        } else {
-            "Runtime incompatible"
+        val moduleAEligible = compatible && dispatcherAudit.moduleAEligible
+        val moduleAReason = when {
+            !compatible -> "Runtime incompatible"
+            !dispatcherAudit.moduleAEligible -> "Refused due to SSB internal callback discrepancy (${dispatcherAudit.discrepancies.joinToString("; ")})"
+            else -> "SSBStackedFastReject verified safe"
         }
 
-        val moduleBEligible = compatible && (riskReport.state == TransactionRiskState.CLEAN)
+        val moduleBEligible = compatible && (riskReport.state == TransactionRiskState.CLEAN) && dispatcherAudit.moduleBEligible
         val moduleBReason = when {
             !compatible -> "Runtime incompatible"
             riskReport.state == TransactionRiskState.RISK_FOUND -> {
@@ -79,6 +99,10 @@ class CompatibilityValidator(
             riskReport.state == TransactionRiskState.SCAN_FAILED -> {
                 logger?.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: transaction risk scan failed (${riskReport.riskSummary})")
                 "Refused due to transaction risk scan failure (${riskReport.riskSummary})"
+            }
+            !dispatcherAudit.moduleBEligible -> {
+                logger?.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: SSB internal callback discrepancy (${dispatcherAudit.discrepancies.joinToString("; ")})")
+                "Refused due to SSB internal callback discrepancy (${dispatcherAudit.discrepancies.joinToString("; ")})"
             }
             else -> "BlockAccountingFastPath verified safe"
         }
@@ -98,7 +122,8 @@ class CompatibilityValidator(
             moduleAEligible = moduleAEligible,
             moduleAReason = moduleAReason,
             moduleBEligible = moduleBEligible,
-            moduleBReason = moduleBReason
+            moduleBReason = moduleBReason,
+            dispatcherAuditResult = dispatcherAudit
         )
 
         lastReport = report
