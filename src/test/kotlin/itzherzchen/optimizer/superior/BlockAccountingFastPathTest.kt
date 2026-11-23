@@ -89,12 +89,13 @@ class BlockAccountingFastPathTest {
         return RegisteredListener(listener, executor, EventPriority.MONITOR, plugin, false) to executor
     }
 
-    private fun pushContext(): ActionContext {
+    private fun pushContext(transactionRiskVerified: Boolean = true): ActionContext {
         val player = mock(Player::class.java)
         val rootBlock = mock(Block::class.java)
         val rootEvent = BlockBreakEvent(rootBlock, player)
         val tool = mock(CuboidTool::class.java)
         val ctx = ActionContext(1L, rootEvent, player, tool)
+        ctx.moduleBTransactionRiskVerified = transactionRiskVerified
         stack.push(ctx)
         return ctx
     }
@@ -479,6 +480,82 @@ class BlockAccountingFastPathTest {
         verify(island, times(1)).handleBlockBreak(any(Key::class.java), eq(1), eq(3))
         assertEquals(1L, counters.monitorFastPaths.sum())
         assertEquals(1L, counters.dirtyTasksAvoided.sum())
+    }
+
+    @Test
+    fun `late transaction risk before first accounting disables Module B and preserves original`() {
+        val ctx = pushContext(transactionRiskVerified = false)
+        val (origRL, mockExecutor) = createRegisteredListener()
+        var scans = 0
+
+        val fastPath = BlockAccountingFastPath(
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            actionContextStack = stack,
+            counters = counters,
+            classifier = createClassifier { TestKey(it.type.name) },
+            transactionRiskCheck = {
+                scans++
+                itzherzchen.optimizer.observe.TransactionRiskReport(
+                    state = itzherzchen.optimizer.observe.TransactionRiskState.RISK_FOUND,
+                    externalListeners = listOf("LateGuard"),
+                    riskSummary = "late listener registered after root LOWEST"
+                )
+            },
+            primaryThreadChecker = { isPrimaryThread },
+            islandProvider = { island }
+        )
+
+        val player = mock(Player::class.java)
+        val event = BlockBreakEvent(mockBlock(material = Material.STONE, x = 1, z = 1), player)
+
+        fastPath.handle(event, origRL)
+
+        assertEquals(1, scans)
+        assertFalse(ctx.moduleBTransactionRiskVerified)
+        assertFalse(fastPath.isEligible)
+        verify(mockExecutor, times(1)).execute(eq(origRL.listener), eq(event))
+        verify(island, never()).handleBlockBreak(any(Key::class.java), anyInt(), anyInt())
+    }
+
+    @Test
+    fun `clean action local transaction census runs exactly once per action`() {
+        val ctx = pushContext(transactionRiskVerified = false)
+        val (origRL, mockExecutor) = createRegisteredListener()
+        var scans = 0
+
+        val fastPath = BlockAccountingFastPath(
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            actionContextStack = stack,
+            counters = counters,
+            classifier = createClassifier { TestKey(it.type.name) },
+            transactionRiskCheck = {
+                scans++
+                itzherzchen.optimizer.observe.TransactionRiskReport(
+                    state = itzherzchen.optimizer.observe.TransactionRiskState.CLEAN,
+                    externalListeners = emptyList(),
+                    riskSummary = "clean"
+                )
+            },
+            primaryThreadChecker = { isPrimaryThread },
+            islandProvider = { island }
+        )
+
+        val player = mock(Player::class.java)
+        val event1 = BlockBreakEvent(mockBlock(material = Material.STONE, x = 1, z = 1), player)
+        val event2 = BlockBreakEvent(mockBlock(material = Material.STONE, x = 2, z = 2), player)
+
+        fastPath.handle(event1, origRL)
+        fastPath.handle(event2, origRL)
+
+        assertEquals(1, scans)
+        assertTrue(ctx.moduleBTransactionRiskVerified)
+        verify(mockExecutor, times(1)).execute(eq(origRL.listener), eq(event1))
+        verify(mockExecutor, never()).execute(eq(origRL.listener), eq(event2))
+        verify(island, times(1)).handleBlockBreak(any(Key::class.java), eq(1), eq(3))
     }
 
     @Test

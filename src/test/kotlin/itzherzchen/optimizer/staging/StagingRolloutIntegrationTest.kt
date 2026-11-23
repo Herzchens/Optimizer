@@ -60,7 +60,7 @@ class StagingRolloutIntegrationTest {
     }
 
     @Test
-    fun `real server staging runner with all 14 state dimensions produces GO_V03_ACTIVE_B decision`() {
+    fun `real server staging runner with all 15 state dimensions produces GO_V03_ACTIVE_B decision`() {
         val completeSnapshotActual = StagingStateSnapshot(
             physicalBlocks = mapOf("world:0,64,0" to "AIR"),
             drops = mapOf("DIAMOND" to 1),
@@ -95,7 +95,7 @@ class StagingRolloutIntegrationTest {
                         name = "Real server staging ${group.title}",
                         group = group,
                         status = TestStatus.PASS,
-                        details = "All 14 dimensions bit-for-bit verified on real Leaf server",
+                        details = "All 15 dimensions bit-for-bit verified on real Leaf server",
                         diff = diff
                     )
                 }
@@ -105,9 +105,9 @@ class StagingRolloutIntegrationTest {
         val validator = RolloutValidator(customRunner = realRunner)
         val report = validator.runValidationMatrix()
 
-        assertEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "Real server staging with all 14 dimensions must issue GO_V03_ACTIVE_B")
+        assertEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "Real server staging with all 15 dimensions must issue GO_V03_ACTIVE_B")
         assertEquals("APPROVED_V03_ACTIVE_B", report.rolloutApprovalStatus)
-        assertEquals("PASS (ALL 14 DIMENSIONS VERIFIED)", report.realStagingEquivalenceStatus)
+        assertEquals("PASS (ALL 15 DIMENSIONS VERIFIED)", report.realStagingEquivalenceStatus)
     }
 
     @Test
@@ -132,6 +132,7 @@ class StagingRolloutIntegrationTest {
         val diff = incompleteSnapshotActual.diff(incompleteSnapshotActual)
         assertFalse(diff.missingDimensions.isEmpty(), "Must detect missing dimensions")
         assertTrue(diff.missingDimensions.contains("economyBalance"))
+        assertFalse(diff.isAuthoritativelyEquivalent, "Incomplete evidence must never be authoritative-equivalent")
 
         val realRunnerWithMissingDimensions = object : StagingRunner {
             override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
@@ -156,6 +157,100 @@ class StagingRolloutIntegrationTest {
         assertEquals(RolloutDecision.NO_GO, report.decision, "Real staging missing dimensions must be refused (NO_GO)")
         assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
         assertTrue(report.summary.contains("missing required state dimensions"))
+    }
+
+    @Test
+    fun `real staging PASS with null diff is refused`() {
+        val realRunner = object : StagingRunner {
+            override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
+
+            override fun execute(): List<TestCaseResult> =
+                MatrixGroup.values().map { group ->
+                    TestCaseResult(
+                        caseId = "${group.name}-NULL-DIFF",
+                        name = "Missing authoritative evidence",
+                        group = group,
+                        status = TestStatus.PASS,
+                        details = "Caller declared PASS without state diff",
+                        diff = null
+                    )
+                }
+        }
+
+        val report = RolloutValidator(customRunner = realRunner).runValidationMatrix()
+
+        assertEquals(RolloutDecision.NO_GO, report.decision)
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
+        assertTrue(report.realStagingEquivalenceStatus.contains("MISSING AUTHORITATIVE DIFF EVIDENCE"))
+    }
+
+    @Test
+    fun `real staging caller PASS cannot override authoritative state drift`() {
+        val expected = StagingStateSnapshot(
+            blockCounts = mapOf("STONE" to 10L),
+            dirtyChunks = setOf(42L),
+            measuredDimensions = StagingStateSnapshot.ALL_REQUIRED_DIMENSIONS
+        )
+        val actual = expected.copy(blockCounts = mapOf("STONE" to 9L))
+        val drift = actual.diff(expected)
+        assertFalse(drift.isEquivalent)
+
+        val realRunner = object : StagingRunner {
+            override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
+
+            override fun execute(): List<TestCaseResult> =
+                MatrixGroup.values().map { group ->
+                    TestCaseResult(
+                        caseId = "${group.name}-DRIFT",
+                        name = "Forged PASS with drift",
+                        group = group,
+                        status = TestStatus.PASS,
+                        details = "Caller declared PASS despite count drift",
+                        diff = drift
+                    )
+                }
+        }
+
+        val report = RolloutValidator(customRunner = realRunner).runValidationMatrix()
+
+        assertEquals(RolloutDecision.NO_GO, report.decision)
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
+        assertTrue(report.realStagingEquivalenceStatus.contains("STATE EQUIVALENCE MISMATCH"))
+    }
+
+    @Test
+    fun `dirty chunks are required authoritative evidence and false clean is refused`() {
+        assertTrue("dirtyChunks" in StagingStateSnapshot.ALL_REQUIRED_DIMENSIONS)
+
+        val expected = StagingStateSnapshot(
+            dirtyChunks = setOf(99L),
+            measuredDimensions = StagingStateSnapshot.ALL_REQUIRED_DIMENSIONS
+        )
+        val actual = expected.copy(dirtyChunks = emptySet())
+        val diff = actual.diff(expected)
+
+        assertFalse(diff.isEquivalent)
+        assertEquals(setOf(99L), diff.falseCleanChunks)
+
+        val realRunner = object : StagingRunner {
+            override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
+
+            override fun execute(): List<TestCaseResult> =
+                MatrixGroup.values().map { group ->
+                    TestCaseResult(
+                        caseId = "${group.name}-FALSE-CLEAN",
+                        name = "False-clean dirty state",
+                        group = group,
+                        status = TestStatus.PASS,
+                        details = "Caller declared PASS despite missing dirty mark",
+                        diff = diff
+                    )
+                }
+        }
+
+        val report = RolloutValidator(customRunner = realRunner).runValidationMatrix()
+        assertEquals(RolloutDecision.NO_GO, report.decision)
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
     }
 
     @Test

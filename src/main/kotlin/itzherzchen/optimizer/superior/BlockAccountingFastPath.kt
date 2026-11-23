@@ -5,6 +5,9 @@ import com.bgsoftware.superiorskyblock.api.island.Island
 import com.bgsoftware.superiorskyblock.api.key.Key
 import itzherzchen.optimizer.config.OptimizerConfig
 import itzherzchen.optimizer.observe.Counters
+import itzherzchen.optimizer.observe.TransactionRiskReport
+import itzherzchen.optimizer.observe.TransactionRiskScanner
+import itzherzchen.optimizer.observe.TransactionRiskState
 import itzherzchen.optimizer.runtime.ActionContextStack
 import itzherzchen.optimizer.runtime.CircuitBreaker
 import itzherzchen.optimizer.runtime.ModeController
@@ -42,6 +45,7 @@ class BlockAccountingFastPath(
     private val counters: Counters,
     private val classifier: VanillaBlockClassifier = VanillaBlockClassifier(),
     private val logger: Logger? = null,
+    private val transactionRiskCheck: () -> TransactionRiskReport = TransactionRiskScanner(logger)::scan,
     private val primaryThreadChecker: () -> Boolean = {
         try {
             Bukkit.isPrimaryThread()
@@ -106,6 +110,39 @@ class BlockAccountingFastPath(
         if (context == null || context.isClosed) {
             callOriginal(original, event)
             return
+        }
+
+        // Close the remaining LOWEST -> synthetic-accounting registration window.
+        // This census executes once per ActionContext, immediately before Module B can
+        // anchor or directly mutate accounting state. Subsequent blocks do not rescan.
+        if (!context.moduleBTransactionRiskVerified) {
+            val riskReport = try {
+                transactionRiskCheck()
+            } catch (t: Throwable) {
+                isEligible = false
+                counters.validationFailures.increment()
+                logger?.log(
+                    Level.WARNING,
+                    "[Optimizer] Action-local Module B transaction-risk census threw before accounting. " +
+                            "Module B monotonically disabled until restart.",
+                    t
+                )
+                callOriginal(original, event)
+                return
+            }
+
+            if (riskReport.state != TransactionRiskState.CLEAN) {
+                isEligible = false
+                counters.validationFailures.increment()
+                logger?.warning(
+                    "[Optimizer] Action-local Module B transaction-risk census refused optimization " +
+                            "(${riskReport.state}: ${riskReport.riskSummary}). Module B monotonically disabled until restart."
+                )
+                callOriginal(original, event)
+                return
+            }
+
+            context.moduleBTransactionRiskVerified = true
         }
 
         val block = event.block

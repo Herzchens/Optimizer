@@ -38,6 +38,13 @@ class ActionContext(
     @Volatile
     var isConfirmed: Boolean = false
 
+    /**
+     * Set only after Module B performs its action-local late transaction-risk census.
+     * The root LOWEST census is intentionally not enough: listeners may be registered later
+     * in the same root event before WildTools begins synthetic accounting.
+     */
+    var moduleBTransactionRiskVerified: Boolean = false
+
     @Volatile
     var isClosed: Boolean = false
         private set
@@ -58,6 +65,7 @@ class ActionContext(
     fun close() {
         if (isClosed) return
         isClosed = true
+        moduleBTransactionRiskVerified = false
         chunkCoverage.reset()
         reusableLocation.world = null
         rootEvent = null

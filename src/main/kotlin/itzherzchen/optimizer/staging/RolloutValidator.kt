@@ -28,7 +28,7 @@ fun interface StagingRunner {
  * - READINESS_AUDIT: Live environment preflight only. Never issues GO_V02 or GO_V03.
  * - MODEL_SIMULATION: Simulated matrix execution. Yields MODEL_PASS / MODEL_FAIL only; never production approval.
  * - REAL_SERVER_STAGING: Authoritative server staging. Only source allowed to issue GO_V02 or GO_V03,
- *   and strictly requires all 14 state dimensions to be measured and verified.
+ *   and strictly requires all 15 state dimensions to be measured and verified.
  */
 class RolloutValidator(
     private val config: OptimizerConfig? = null,
@@ -134,29 +134,44 @@ class RolloutValidator(
             }
 
             EvidenceProvenance.REAL_SERVER_STAGING -> {
-                // REAL_SERVER_STAGING: Only source allowed to issue authoritative GO_V02/GO_V03
-                // Must verify that all required dimensions are covered and zero failure
+                // REAL_SERVER_STAGING is authoritative only when evidence itself proves equivalence.
+                // Caller-declared PASS is never sufficient: every contributing case must carry a
+                // complete diff and that diff must be authoritative-equivalent.
+                val hasMissingEvidence = allCaseResults.any { it.diff == null }
                 val hasMissingDimensions = allCaseResults.any { it.diff?.missingDimensions?.isNotEmpty() == true }
+                val hasNonEquivalentEvidence = allCaseResults.any { it.diff?.isAuthoritativelyEquivalent != true }
+                val authoritativeEvidenceInvalid =
+                    hasMissingEvidence || hasMissingDimensions || hasNonEquivalentEvidence
                 val allGroupsPass = groupResults.values.all { it.status == TestStatus.PASS }
 
-                if (failed > 0 || protectionFailed || failureFailed || stackingFailed || hasMissingDimensions) {
+                if (failed > 0 || protectionFailed || failureFailed || stackingFailed || authoritativeEvidenceInvalid) {
                     decision = RolloutDecision.NO_GO
                     modelStatus = "PASS"
                     readinessStatus = "PASS"
-                    realStagingStatus = if (hasMissingDimensions) "FAIL (MISSING REQUIRED STATE DIMENSIONS)" else "FAIL"
+                    realStagingStatus = when {
+                        hasMissingEvidence -> "FAIL (MISSING AUTHORITATIVE DIFF EVIDENCE)"
+                        hasMissingDimensions -> "FAIL (MISSING REQUIRED STATE DIMENSIONS)"
+                        hasNonEquivalentEvidence -> "FAIL (STATE EQUIVALENCE MISMATCH)"
+                        else -> "FAIL"
+                    }
                     rolloutApprovalStatus = "NOT GRANTED"
-                    summary = if (hasMissingDimensions) {
-                        "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL (Refused: missing required state dimensions) | ROLLOUT APPROVAL: NOT GRANTED"
-                    } else {
-                        "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL | ROLLOUT APPROVAL: NOT GRANTED (Equivalence matrix violation detected)"
+                    summary = when {
+                        hasMissingEvidence ->
+                            "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL (Refused: authoritative diff evidence missing) | ROLLOUT APPROVAL: NOT GRANTED"
+                        hasMissingDimensions ->
+                            "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL (Refused: missing required state dimensions) | ROLLOUT APPROVAL: NOT GRANTED"
+                        hasNonEquivalentEvidence ->
+                            "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL (Refused: authoritative state mismatch) | ROLLOUT APPROVAL: NOT GRANTED"
+                        else ->
+                            "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: FAIL | ROLLOUT APPROVAL: NOT GRANTED (Equivalence matrix violation detected)"
                     }
                 } else if (allGroupsPass) {
                     decision = RolloutDecision.GO_V03_ACTIVE_B
                     modelStatus = "PASS"
                     readinessStatus = "PASS"
-                    realStagingStatus = "PASS (ALL 14 DIMENSIONS VERIFIED)"
+                    realStagingStatus = "PASS (ALL 15 DIMENSIONS VERIFIED)"
                     rolloutApprovalStatus = "APPROVED_V03_ACTIVE_B"
-                    summary = "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: PASS (All 14 dimensions bit-for-bit equivalent) | ROLLOUT APPROVAL: APPROVED_V03_ACTIVE_B"
+                    summary = "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: PASS (All 15 dimensions authoritatively equivalent) | ROLLOUT APPROVAL: APPROVED_V03_ACTIVE_B"
                 } else if (groupResults[MatrixGroup.STACKING]?.status == TestStatus.PASS && groupResults[MatrixGroup.PROTECTION]?.status == TestStatus.PASS) {
                     decision = RolloutDecision.GO_V02_ACTIVE_A
                     modelStatus = "PASS"

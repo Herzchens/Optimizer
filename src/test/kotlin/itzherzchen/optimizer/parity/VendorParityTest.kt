@@ -3,6 +3,7 @@ package itzherzchen.optimizer.parity
 import itzherzchen.optimizer.bootstrap.RuntimeFingerprint
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -62,12 +63,24 @@ class VendorParityTest {
             }
         }
 
-        fun isReturnTypeCompatible(stubRet: String, realRet: String): Boolean {
-            if (stubRet == realRet) return true
-            if (stubRet == "com.bgsoftware.superiorskyblock.core.key.types.MaterialKey" && realRet == "com.bgsoftware.superiorskyblock.api.key.Key") return true
-            if (stubRet == "com.bgsoftware.superiorskyblock.api.key.Key" && realRet == "com.bgsoftware.superiorskyblock.core.key.types.MaterialKey") return true
-            return false
-        }
+        fun isReturnTypeCompatible(stubRet: String, realRet: String): Boolean =
+            stubRet == realRet
+    }
+
+    @Test
+    fun `different JVM return descriptors are not ABI compatible`() {
+        assertTrue(isReturnTypeCompatible(
+            "com.bgsoftware.superiorskyblock.api.key.Key",
+            "com.bgsoftware.superiorskyblock.api.key.Key"
+        ))
+        assertFalse(isReturnTypeCompatible(
+            "com.bgsoftware.superiorskyblock.api.key.Key",
+            "com.bgsoftware.superiorskyblock.core.key.types.MaterialKey"
+        ))
+        assertFalse(isReturnTypeCompatible(
+            "com.bgsoftware.superiorskyblock.core.key.types.MaterialKey",
+            "com.bgsoftware.superiorskyblock.api.key.Key"
+        ))
     }
 
     @Test
@@ -119,7 +132,7 @@ class VendorParityTest {
     }
 
     @Test
-    fun `stub definitions have 100 percent ABI parity with real vendor binaries`() {
+    fun `stub definitions match exact public vendor method descriptors when real binaries are present`() {
         val libsDir = File("libs")
         val wtJar = File(libsDir, WT_JAR_NAME)
         val ssbJar = File(libsDir, SSB_JAR_NAME)
@@ -166,6 +179,11 @@ class VendorParityTest {
             }
 
             assertNotNull(realClass, "Real vendor class $className must exist")
+            assertEquals(
+                stubClass.isInterface,
+                realClass.isInterface,
+                "Class/interface kind mismatch for $className"
+            )
 
             // Verify all public/protected methods declared in stub exist in real class
             for (stubMethod in stubClass.declaredMethods) {
@@ -178,10 +196,12 @@ class VendorParityTest {
                 val realMethods = realClass.methods.filter { it.name == stubMethod.name }
                 val matchingMethod = realMethods.firstOrNull { realM ->
                     realM.parameterTypes.map { it.name } == stubMethod.parameterTypes.map { it.name } &&
-                            isReturnTypeCompatible(stubRet, realM.returnType.name)
+                            isReturnTypeCompatible(stubRet, realM.returnType.name) &&
+                            Modifier.isStatic(realM.modifiers) == Modifier.isStatic(mod)
                 } ?: realClass.declaredMethods.filter { it.name == stubMethod.name }.firstOrNull { realM ->
                     realM.parameterTypes.map { it.name } == stubMethod.parameterTypes.map { it.name } &&
-                            isReturnTypeCompatible(stubRet, realM.returnType.name)
+                            isReturnTypeCompatible(stubRet, realM.returnType.name) &&
+                            Modifier.isStatic(realM.modifiers) == Modifier.isStatic(mod)
                 }
 
                 assertNotNull(
@@ -213,6 +233,11 @@ class VendorParityTest {
                     stubField.type.name,
                     realField.type.name,
                     "Type mismatch for field '${stubField.name}' on class $className"
+                )
+                assertEquals(
+                    Modifier.isStatic(stubField.modifiers),
+                    Modifier.isStatic(realField.modifiers),
+                    "Static/instance mismatch for field '${stubField.name}' on class $className"
                 )
             }
         }

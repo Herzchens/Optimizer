@@ -232,23 +232,23 @@ val verifyPluginJar = tasks.register("verifyPluginJar") {
     }
 }
 
-val verifyVendorParity = tasks.register("verifyVendorParity") {
+val verifyCompileSurface = tasks.register("verifyCompileSurface") {
     group = "verification"
-    description = "Verifies ABI and classfile parity between stub compilation and real vendor compilation"
+    description = "Validates compiled Optimizer class output for the selected vendor mode; does not claim cross-mode parity"
     dependsOn(tasks.compileKotlin, tasks.named("stubClasses"))
     doLast {
         val classesDir = file("build/classes/kotlin/main")
         if (!classesDir.exists()) {
-            throw GradleException("verifyVendorParity failed: build/classes/kotlin/main does not exist")
+            throw GradleException("verifyCompileSurface failed: build/classes/kotlin/main does not exist")
         }
         val classFiles = classesDir.walkTopDown().filter { it.isFile && it.name.endsWith(".class") }.toList()
         if (classFiles.isEmpty()) {
-            throw GradleException("verifyVendorParity failed: no compiled class files found in $classesDir")
+            throw GradleException("verifyCompileSurface failed: no compiled class files found in $classesDir")
         }
         if (vendorMode == "real") {
-            logger.lifecycle("Vendor parity check: verified ${classFiles.size} compiled classfiles against approved vendor binaries (WildTools & SuperiorSkyblock2).")
+            logger.lifecycle("Compile surface check: ${classFiles.size} Optimizer classfiles built against exact approved vendor binaries. Cross-mode classfile parity is NOT evaluated by this task.")
         } else {
-            logger.lifecycle("Vendor parity check: verified ${classFiles.size} compiled classfiles against compile-time stubs (CI ABI-compatible path).")
+            logger.lifecycle("Compile surface check: ${classFiles.size} Optimizer classfiles built against compile-time stubs. Real-vendor parity is NOT executed in CI.")
         }
     }
 }
@@ -258,11 +258,11 @@ tasks.assemble {
 }
 
 tasks.check {
-    dependsOn(verifyPluginJar, verifyVendorParity)
+    dependsOn(verifyPluginJar, verifyCompileSurface)
 }
 
 tasks.build {
-    dependsOn(verifyPluginJar, verifyVendorParity)
+    dependsOn(verifyPluginJar, verifyCompileSurface)
 }
 
 tasks.wrapper {

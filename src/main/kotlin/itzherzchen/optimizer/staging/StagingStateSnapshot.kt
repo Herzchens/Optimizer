@@ -5,7 +5,7 @@ import itzherzchen.optimizer.observe.Counters
 /**
  * Programmatic state snapshot of island and runtime state before and after block break actions.
  * Used by Staging Equivalence Tooling to prove bit-for-bit equivalence between unoptimized baseline
- * and optimized execution paths across all 14 required dimensions.
+ * and optimized execution paths across all 15 required dimensions.
  */
 data class StagingStateSnapshot(
     val physicalBlocks: Map<String, String> = emptyMap(),
@@ -42,7 +42,8 @@ data class StagingStateSnapshot(
             "protectionResult",
             "economyBalance",
             "exceptionsRecorded",
-            "persistedRestartEquivalent"
+            "persistedRestartEquivalent",
+            "dirtyChunks"
         )
 
         val DEFAULT_MEASURED_DIMENSIONS = setOf(
@@ -135,6 +136,8 @@ data class StagingStateSnapshot(
         val economyMismatched = this.economyBalance != expected.economyBalance
         val exceptionMismatched = this.exceptionsRecorded != expected.exceptionsRecorded
         val persistenceMismatched = !this.persistedRestartEquivalent || !expected.persistedRestartEquivalent
+        val missingDimensions =
+            (getMissingAuthoritativeDimensions() + expected.getMissingAuthoritativeDimensions()).toList()
 
         val isEquivalent = blockCountMismatches.isEmpty() &&
                 stackMismatches.isEmpty() &&
@@ -174,7 +177,7 @@ data class StagingStateSnapshot(
             economyMismatch = economyMismatched,
             exceptionMismatch = exceptionMismatched,
             persistenceMismatch = persistenceMismatched,
-            missingDimensions = (getMissingAuthoritativeDimensions() + expected.getMissingAuthoritativeDimensions()).toList()
+            missingDimensions = missingDimensions
         )
     }
 }
@@ -206,6 +209,13 @@ data class StagingStateDiff(
     val persistenceMismatch: Boolean = false,
     val missingDimensions: List<String> = emptyList()
 ) {
+    /**
+     * Authoritative equivalence requires both semantic equality and complete evidence coverage.
+     * Model simulations may still use isEquivalent for their explicitly measured subset.
+     */
+    val isAuthoritativelyEquivalent: Boolean
+        get() = isEquivalent && missingDimensions.isEmpty()
+
     fun summary(): String {
         if (isEquivalent) {
             return if (staleDirtyChunks.isNotEmpty()) {
