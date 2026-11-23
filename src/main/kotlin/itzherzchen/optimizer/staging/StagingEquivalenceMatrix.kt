@@ -1,18 +1,31 @@
 package itzherzchen.optimizer.staging
 
 /**
+ * Provenance of evidence supplied for staging rollout validation.
+ */
+enum class EvidenceProvenance {
+    READINESS_AUDIT,
+    MODEL_SIMULATION,
+    REAL_SERVER_STAGING
+}
+
+/**
  * Rollout validation decisions for optimizer staging gates.
  *
  * Implements Plan.md Section 8 & Section 9:
  * - v0.1 OBSERVE gate: Scaffolding/observe validated, no WT mutation.
  * - v0.2 ACTIVE A gate: StackedFastReject approved, stacked x2/x64 and protection equivalence verified.
  * - v0.3 ACTIVE B gate: BlockAccountingFastPath approved, full equivalence matrix verified.
- * - NO_GO: Any count drift, worth drift, protection bypass, dupe, or false-clean blocks rollout.
+ * - MODEL_PASS: Model simulation matrix passed (cannot issue staging rollout approval).
+ * - MODEL_FAIL: Model simulation matrix failed.
+ * - NO_GO: Any count drift, worth drift, protection bypass, dupe, false-clean blocks rollout.
  */
 enum class RolloutDecision {
     GO_V03_ACTIVE_B,
     GO_V02_ACTIVE_A,
     GO_V01_OBSERVE,
+    MODEL_PASS,
+    MODEL_FAIL,
     NO_GO,
     READY_FOR_STAGING,
     MODULE_A_ELIGIBLE,
@@ -45,7 +58,9 @@ enum class MatrixGroup(val title: String, val description: String) {
 enum class TestStatus {
     PASS,
     WARN,
-    FAIL
+    FAIL,
+    READY,
+    NOT_RUN
 }
 
 data class TestCaseResult(
@@ -76,6 +91,7 @@ data class RolloutReport(
     val failedTests: Int,
     val totalTimeMs: Long,
     val isReadinessOnly: Boolean = false,
+    val provenance: EvidenceProvenance = EvidenceProvenance.READINESS_AUDIT,
     val modelValidationStatus: String = "NOT RUN",
     val runtimeReadinessStatus: String = "NOT RUN",
     val realStagingEquivalenceStatus: String = "NOT RUN",

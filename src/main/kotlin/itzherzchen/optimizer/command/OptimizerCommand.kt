@@ -228,6 +228,8 @@ class OptimizerCommand(
         for ((group, groupRes) in report.groupResults) {
             val color = when (groupRes.status) {
                 itzherzchen.optimizer.staging.TestStatus.PASS -> NamedTextColor.GREEN
+                itzherzchen.optimizer.staging.TestStatus.READY -> NamedTextColor.AQUA
+                itzherzchen.optimizer.staging.TestStatus.NOT_RUN -> NamedTextColor.GRAY
                 itzherzchen.optimizer.staging.TestStatus.WARN -> NamedTextColor.YELLOW
                 itzherzchen.optimizer.staging.TestStatus.FAIL -> NamedTextColor.RED
             }
@@ -236,8 +238,12 @@ class OptimizerCommand(
                 .append(Component.text("(${groupRes.passedCount}/${groupRes.totalCount} passed)", NamedTextColor.GRAY)))
 
             for (caseRes in groupRes.caseResults) {
-                if (caseRes.status != itzherzchen.optimizer.staging.TestStatus.PASS) {
-                    val cColor = if (caseRes.status == itzherzchen.optimizer.staging.TestStatus.WARN) NamedTextColor.YELLOW else NamedTextColor.RED
+                if (caseRes.status != itzherzchen.optimizer.staging.TestStatus.PASS && caseRes.status != itzherzchen.optimizer.staging.TestStatus.READY) {
+                    val cColor = when (caseRes.status) {
+                        itzherzchen.optimizer.staging.TestStatus.WARN -> NamedTextColor.YELLOW
+                        itzherzchen.optimizer.staging.TestStatus.NOT_RUN -> NamedTextColor.GRAY
+                        else -> NamedTextColor.RED
+                    }
                     sender.sendMessage(Component.text("    - [${caseRes.caseId}] ${caseRes.name}: ${caseRes.details}", cColor))
                 }
             }
@@ -246,6 +252,8 @@ class OptimizerCommand(
         val decisionColor = when (report.decision) {
             itzherzchen.optimizer.staging.RolloutDecision.GO_V03_ACTIVE_B -> NamedTextColor.GREEN
             itzherzchen.optimizer.staging.RolloutDecision.GO_V02_ACTIVE_A -> NamedTextColor.AQUA
+            itzherzchen.optimizer.staging.RolloutDecision.MODEL_PASS -> NamedTextColor.GREEN
+            itzherzchen.optimizer.staging.RolloutDecision.MODEL_FAIL -> NamedTextColor.RED
             itzherzchen.optimizer.staging.RolloutDecision.READY_FOR_STAGING -> NamedTextColor.AQUA
             itzherzchen.optimizer.staging.RolloutDecision.MODULE_A_ELIGIBLE -> NamedTextColor.AQUA
             itzherzchen.optimizer.staging.RolloutDecision.MODULE_B_BLOCKED -> NamedTextColor.YELLOW

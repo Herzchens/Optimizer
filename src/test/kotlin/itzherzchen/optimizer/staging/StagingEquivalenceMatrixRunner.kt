@@ -53,6 +53,8 @@ import org.mockito.Mockito.*
  */
 class StagingEquivalenceMatrixRunner : StagingRunner {
 
+    override val provenance: EvidenceProvenance = EvidenceProvenance.MODEL_SIMULATION
+
     class StagingTestKey(private val global: String, private val sub: String = "") : Key {
         override fun getGlobalKey(): String = global
         override fun getSubKey(): String = sub

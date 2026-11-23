@@ -23,23 +23,139 @@ import org.mockito.Mockito.`when`
 class StagingRolloutIntegrationTest {
 
     @Test
-    fun `complete 8-group equivalence matrix produces GO_V03_ACTIVE_B decision`() {
+    fun `complete 8-group simulated equivalence matrix produces MODEL_PASS and strictly refuses rollout approval`() {
         val validator = RolloutValidator(customRunner = StagingEquivalenceMatrixRunner())
         val report = validator.runValidationMatrix()
 
-        val failedCases = report.groupResults.values.flatMap { it.caseResults }.filter { it.status != TestStatus.PASS }
+        val failedCases = report.groupResults.values.flatMap { it.caseResults }.filter { it.status == TestStatus.FAIL }
         assertTrue(failedCases.isEmpty(), "Failed cases: " + failedCases.map { "${it.caseId}: ${it.details}" })
 
-        assertEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "Full clean matrix must issue GO_V03_ACTIVE_B")
+        assertEquals(RolloutDecision.MODEL_PASS, report.decision, "Simulated matrix must issue MODEL_PASS, never production approval")
+        assertEquals("PASS", report.modelValidationStatus)
+        assertEquals("PASS", report.runtimeReadinessStatus)
+        assertEquals("NOT RUN (SIMULATION ONLY)", report.realStagingEquivalenceStatus)
+        assertEquals("NOT GRANTED (SIMULATION CANNOT APPROVE ROLLOUT)", report.rolloutApprovalStatus)
         assertEquals(0, report.failedTests, "Zero tests should fail in clean equivalence run")
         assertTrue(report.totalTests >= 24, "Should evaluate at least 24 distinct test cases across 8 groups")
 
         for (group in MatrixGroup.values()) {
             val groupResult = report.groupResults[group]
             assertNotNull(groupResult, "Result for group $group must exist")
-            assertEquals(TestStatus.PASS, groupResult!!.status, "Group $group must PASS")
+            assertTrue(groupResult!!.status == TestStatus.PASS || groupResult.status == TestStatus.READY, "Group $group must PASS or be READY")
             assertTrue(groupResult.passedCount > 0, "Group $group must have passed test cases")
         }
+    }
+
+    @Test
+    fun `simulated matrix can NEVER produce authoritative GO_V02 or GO_V03`() {
+        val runner = StagingEquivalenceMatrixRunner()
+        assertEquals(EvidenceProvenance.MODEL_SIMULATION, runner.provenance, "Matrix runner provenance must be MODEL_SIMULATION")
+
+        val validator = RolloutValidator(customRunner = runner)
+        val report = validator.runValidationMatrix()
+
+        assertNotEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "MODEL_SIMULATION must never yield GO_V03_ACTIVE_B")
+        assertNotEquals(RolloutDecision.GO_V02_ACTIVE_A, report.decision, "MODEL_SIMULATION must never yield GO_V02_ACTIVE_A")
+        assertFalse(report.rolloutApprovalStatus.startsWith("APPROVED"), "Rollout approval must not be granted from simulation")
+    }
+
+    @Test
+    fun `real server staging runner with all 14 state dimensions produces GO_V03_ACTIVE_B decision`() {
+        val completeSnapshotActual = StagingStateSnapshot(
+            physicalBlocks = mapOf("world:0,64,0" to "AIR"),
+            drops = mapOf("DIAMOND" to 1),
+            playerInventory = mapOf("DIAMOND" to 1),
+            playerXp = 100L,
+            toolDurability = 50,
+            blockCounts = mapOf("DIAMOND_ORE" to 1L),
+            islandWorth = 500L,
+            islandLevel = 5L,
+            stackedAmounts = mapOf("world:0,64,0" to 1),
+            signsAndWarps = mapOf("world:0,64,0" to "Welcome"),
+            protectionResult = true,
+            economyBalance = 1000.0,
+            exceptionsRecorded = emptyList(),
+            persistedRestartEquivalent = true,
+            dirtyChunks = setOf(100L),
+            measuredDimensions = StagingStateSnapshot.ALL_REQUIRED_DIMENSIONS
+        )
+
+        val completeSnapshotExpected = completeSnapshotActual.copy()
+        val diff = completeSnapshotActual.diff(completeSnapshotExpected)
+        assertTrue(diff.isEquivalent)
+        assertTrue(diff.missingDimensions.isEmpty())
+
+        val realRunner = object : StagingRunner {
+            override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
+
+            override fun execute(): List<TestCaseResult> {
+                return MatrixGroup.values().map { group ->
+                    TestCaseResult(
+                        caseId = "${group.name}-REAL",
+                        name = "Real server staging ${group.title}",
+                        group = group,
+                        status = TestStatus.PASS,
+                        details = "All 14 dimensions bit-for-bit verified on real Leaf server",
+                        diff = diff
+                    )
+                }
+            }
+        }
+
+        val validator = RolloutValidator(customRunner = realRunner)
+        val report = validator.runValidationMatrix()
+
+        assertEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "Real server staging with all 14 dimensions must issue GO_V03_ACTIVE_B")
+        assertEquals("APPROVED_V03_ACTIVE_B", report.rolloutApprovalStatus)
+        assertEquals("PASS (ALL 14 DIMENSIONS VERIFIED)", report.realStagingEquivalenceStatus)
+    }
+
+    @Test
+    fun `real staging approval missing one required state dimension is refused`() {
+        // Missing economyBalance and persistedRestartEquivalent
+        val incompleteDimensions = StagingStateSnapshot.ALL_REQUIRED_DIMENSIONS - setOf("economyBalance", "persistedRestartEquivalent")
+        val incompleteSnapshotActual = StagingStateSnapshot(
+            physicalBlocks = mapOf("world:0,64,0" to "AIR"),
+            drops = mapOf("DIAMOND" to 1),
+            playerInventory = mapOf("DIAMOND" to 1),
+            playerXp = 100L,
+            toolDurability = 50,
+            blockCounts = mapOf("DIAMOND_ORE" to 1L),
+            islandWorth = 500L,
+            islandLevel = 5L,
+            stackedAmounts = mapOf("world:0,64,0" to 1),
+            signsAndWarps = mapOf("world:0,64,0" to "Welcome"),
+            protectionResult = true,
+            measuredDimensions = incompleteDimensions
+        )
+
+        val diff = incompleteSnapshotActual.diff(incompleteSnapshotActual)
+        assertFalse(diff.missingDimensions.isEmpty(), "Must detect missing dimensions")
+        assertTrue(diff.missingDimensions.contains("economyBalance"))
+
+        val realRunnerWithMissingDimensions = object : StagingRunner {
+            override val provenance: EvidenceProvenance = EvidenceProvenance.REAL_SERVER_STAGING
+
+            override fun execute(): List<TestCaseResult> {
+                return MatrixGroup.values().map { group ->
+                    TestCaseResult(
+                        caseId = "${group.name}-REAL-INCOMPLETE",
+                        name = "Real server staging ${group.title}",
+                        group = group,
+                        status = TestStatus.PASS,
+                        details = "Missing dimensions",
+                        diff = diff
+                    )
+                }
+            }
+        }
+
+        val validator = RolloutValidator(customRunner = realRunnerWithMissingDimensions)
+        val report = validator.runValidationMatrix()
+
+        assertEquals(RolloutDecision.NO_GO, report.decision, "Real staging missing dimensions must be refused (NO_GO)")
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
+        assertTrue(report.summary.contains("missing required state dimensions"))
     }
 
     @Test
