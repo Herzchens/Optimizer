@@ -80,3 +80,20 @@ jobs:
             exit 1
           fi
           echo "Artifact packaging verification passed successfully!"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          set -e
+          cd build/libs
+          sha256sum Optimizer-0.1.0-SNAPSHOT.jar > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload validated CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-snapshot-artifact
+          path: |
+            build/libs/Optimizer-0.1.0-SNAPSHOT.jar
+            build/libs/SHA256SUMS.txt
+          retention-days: 5
+          if-no-files-found: error

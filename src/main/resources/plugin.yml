@@ -1,6 +1,6 @@
 name: Optimizer
 main: itzherzchen.optimizer.OptimizerPlugin
-version: 0.1.0-SNAPSHOT
+version: ${version}
 api-version: '1.21.4'
 author: itzherzchen
 depend:

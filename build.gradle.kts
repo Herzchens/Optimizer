@@ -2,11 +2,16 @@ import java.util.zip.ZipFile
 
 plugins {
     kotlin("jvm") version "2.4.21"
-    id("com.gradleup.shadow") version "8.3.6"
+    id("com.gradleup.shadow") version "9.6.1"
 }
 
+val releaseVersion = (project.findProperty("releaseVersion") as? String)
+    ?.trim()
+    ?.removePrefix("v")
+    ?.takeIf { it.isNotBlank() }
+
 group = "itzherzchen.optimizer"
-version = "0.1.0-SNAPSHOT"
+version = releaseVersion ?: "0.1.0-SNAPSHOT"
 
 val localLibs = fileTree("libs") { include("*.jar") }
 val hasLocalLibs = localLibs.files.isNotEmpty()
@@ -77,6 +82,15 @@ tasks.jar {
     enabled = false
 }
 
+tasks.processResources {
+    val props = mapOf("version" to project.version.toString())
+    inputs.properties(props)
+    filteringCharset = "UTF-8"
+    filesMatching("plugin.yml") {
+        expand(props)
+    }
+}
+
 tasks.shadowJar {
     archiveClassifier.set("")
     // Shade Kotlin stdlib, do not relocate kotlin.*, do not minimize
@@ -84,7 +98,7 @@ tasks.shadowJar {
     exclude("com/bgsoftware/**")
 }
 
-val verifyPluginJar by tasks.registering {
+val verifyPluginJar = tasks.register("verifyPluginJar") {
     dependsOn(tasks.shadowJar)
     val shadowJarFile = tasks.shadowJar.flatMap { it.archiveFile }
     inputs.file(shadowJarFile)
@@ -108,6 +122,14 @@ val verifyPluginJar by tasks.registering {
             if (required !in entries) {
                 throw GradleException("Verification failed: Deployable JAR is missing required entry: '$required'")
             }
+        }
+
+        val pluginYmlContent = ZipFile(jarFile).use { zip ->
+            val entry = zip.getEntry("plugin.yml") ?: throw GradleException("plugin.yml missing from jar")
+            zip.getInputStream(entry).bufferedReader().readText()
+        }
+        if (pluginYmlContent.contains("\${version}")) {
+            throw GradleException("Verification failed: Deployable JAR plugin.yml contains unexpanded '\${version}'")
         }
 
         val forbiddenPrefixes = listOf(
@@ -137,7 +159,7 @@ tasks.build {
 }
 
 tasks.wrapper {
-    gradleVersion = "8.14.4"
+    gradleVersion = "9.9.2"
     distributionType = Wrapper.DistributionType.BIN
 }
 

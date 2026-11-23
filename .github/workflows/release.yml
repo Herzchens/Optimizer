@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+
+      - name: Git diff check
+        run: git diff --check
+
+      - name: Verify forbidden tracked files
+        run: |
+          set -e
+          echo "Checking for tracked local_* files..."
+          LOCAL_FILES=$(git ls-files 'local_*' '**/local_*' || true)
+          if [ -n "$LOCAL_FILES" ]; then
+            echo "Error: Found tracked local_* files:"
+            echo "$LOCAL_FILES"
+            exit 1
+          fi
+
+          echo "Checking for tracked proprietary JAR files..."
+          TRACKED_JARS=$(git ls-files '*.jar' ':!gradle/wrapper/gradle-wrapper.jar' || true)
+          if [ -n "$TRACKED_JARS" ]; then
+            echo "Error: Found tracked proprietary JAR files:"
+            echo "$TRACKED_JARS"
+            exit 1
+          fi
+
+      - name: Validate release tag version
+        id: parse_version
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Release tag: $TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Tag '$TAG' does not match required semver pattern 'v<semver>'"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" =~ SNAPSHOT ]]; then
+            echo "Error: Release version cannot contain SNAPSHOT ($VERSION)"
+            exit 1
+          fi
+          echo "Derived release version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build release binary and run full test suite
+        run: |
+          VERSION="${{ steps.parse_version.outputs.version }}"
+          ./gradlew build "-PreleaseVersion=${VERSION}" --no-daemon --stacktrace
+
+      - name: Verify deployable release artifact packaging and version equality
+        run: |
+          set -e
+          VERSION="${{ steps.parse_version.outputs.version }}"
+          JAR_FILE="build/libs/Optimizer-${VERSION}.jar"
+          if [ ! -f "$JAR_FILE" ]; then
+            echo "Error: Deployable artifact $JAR_FILE not found!"
+            exit 1
+          fi
+
+          JAR_ENTRIES=$(unzip -l "$JAR_FILE")
+
+          echo "Checking required entries in $JAR_FILE..."
+          echo "$JAR_ENTRIES" | grep -F "kotlin/jvm/internal/Intrinsics.class" || { echo "Missing kotlin/jvm/internal/Intrinsics.class"; exit 1; }
+          echo "$JAR_ENTRIES" | grep -F "itzherzchen/optimizer/OptimizerPlugin.class" || { echo "Missing itzherzchen/optimizer/OptimizerPlugin.class"; exit 1; }
+          echo "$JAR_ENTRIES" | grep -F "plugin.yml" || { echo "Missing plugin.yml"; exit 1; }
+          echo "$JAR_ENTRIES" | grep -F "config.yml" || { echo "Missing config.yml"; exit 1; }
+
+          echo "Verifying absence of vendor implementation classes..."
+          if echo "$JAR_ENTRIES" | grep -F "com/bgsoftware/wildtools/"; then
+            echo "Error: WildTools implementation classes found in deployable artifact!"
+            exit 1
+          fi
+          if echo "$JAR_ENTRIES" | grep -F "com/bgsoftware/superiorskyblock/"; then
+            echo "Error: SuperiorSkyblock2 implementation classes found in deployable artifact!"
+            exit 1
+          fi
+
+          echo "Verifying exact version equality inside plugin.yml..."
+          PLUGIN_YML_VERSION=$(unzip -p "$JAR_FILE" plugin.yml | grep "^version:" | head -n 1 | awk '{print $2}' | tr -d '\r"')
+          echo "plugin.yml version: '$PLUGIN_YML_VERSION'"
+          echo "expected version:   '$VERSION'"
+          if [ "$PLUGIN_YML_VERSION" != "$VERSION" ]; then
+            echo "Error: Version mismatch! plugin.yml has '$PLUGIN_YML_VERSION', expected '$VERSION'"
+            exit 1
+          fi
+          echo "Packaging and version verification passed successfully!"
+
+      - name: Calculate SHA-256 checksums
+        run: |
+          set -e
+          VERSION="${{ steps.parse_version.outputs.version }}"
+          cd build/libs
+          sha256sum "Optimizer-${VERSION}.jar" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.parse_version.outputs.tag }}
+          VERSION: ${{ steps.parse_version.outputs.version }}
+        run: |
+          set -e
+          gh release create "$TAG" \
+            "build/libs/Optimizer-${VERSION}.jar" \
+            "build/libs/SHA256SUMS.txt" \
+            --title "Optimizer $TAG" \
+            --generate-notes
