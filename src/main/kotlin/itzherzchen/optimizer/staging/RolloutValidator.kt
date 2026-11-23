@@ -50,6 +50,7 @@ class RolloutValidator(
     fun runValidationMatrix(): RolloutReport {
         val start = System.currentTimeMillis()
 
+        val isReadinessOnly = customRunner == null
         val allCaseResults = if (customRunner != null) {
             customRunner!!.execute()
         } else {
@@ -85,19 +86,56 @@ class RolloutValidator(
         val failureFailed = groupResults[MatrixGroup.FAILURE]?.status != TestStatus.PASS
         val stackingFailed = groupResults[MatrixGroup.STACKING]?.status != TestStatus.PASS
 
-        val decision = when {
-            failed > 0 || protectionFailed || failureFailed || stackingFailed -> RolloutDecision.NO_GO
-            groupResults.values.all { it.status == TestStatus.PASS } -> RolloutDecision.GO_V03_ACTIVE_B
-            groupResults[MatrixGroup.STACKING]?.status == TestStatus.PASS &&
-                    groupResults[MatrixGroup.PROTECTION]?.status == TestStatus.PASS -> RolloutDecision.GO_V02_ACTIVE_A
-            else -> RolloutDecision.GO_V01_OBSERVE
-        }
+        val decision: RolloutDecision
+        val summary: String
+        val modelStatus: String
+        val readinessStatus: String
+        val realStagingStatus: String
+        val rolloutApprovalStatus: String
 
-        val summary = when (decision) {
-            RolloutDecision.GO_V03_ACTIVE_B -> "PASS: Full equivalence matrix verified with 0 drift, 0 false-clean. Ready for v0.3 ACTIVE B rollout."
-            RolloutDecision.GO_V02_ACTIVE_A -> "PASS: Module A (StackedFastReject) verified. Ready for v0.2 ACTIVE A rollout."
-            RolloutDecision.GO_V01_OBSERVE -> "WARN: Scaffolding and observe mode verified, but active gates deferred."
-            RolloutDecision.NO_GO -> "FAIL: Non-negotiable invariant violation detected! Rollout BLOCKED."
+        if (isReadinessOnly) {
+            // Live readiness audit semantics:
+            // Under NO circumstance can readiness-only input yield GO_V03_ACTIVE_B or GO_V02_ACTIVE_A
+            val txWarning = groupResults[MatrixGroup.TRANSACTIONS]?.status == TestStatus.WARN
+            decision = when {
+                failed > 0 || protectionFailed || failureFailed -> RolloutDecision.NO_GO
+                txWarning -> RolloutDecision.MODULE_B_BLOCKED
+                else -> RolloutDecision.READY_FOR_STAGING
+            }
+
+            modelStatus = "NOT RUN"
+            readinessStatus = if (decision == RolloutDecision.NO_GO) "FAIL" else "PASS"
+            realStagingStatus = "NOT RUN"
+            rolloutApprovalStatus = "NOT GRANTED"
+
+            summary = when (decision) {
+                RolloutDecision.NO_GO -> "MODEL VALIDATION: NOT RUN | RUNTIME READINESS: FAIL | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED (Non-negotiable invariant violation detected! Rollout BLOCKED.)"
+                RolloutDecision.MODULE_B_BLOCKED -> "MODEL VALIDATION: NOT RUN | RUNTIME READINESS: PASS (Module A eligible, Module B blocked due to transaction risk) | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED"
+                RolloutDecision.READY_FOR_STAGING -> "MODEL VALIDATION: NOT RUN | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED (Authoritative staging equivalence execution required before production rollout approval)"
+                else -> "MODEL VALIDATION: NOT RUN | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED"
+            }
+        } else {
+            // Authoritative matrix runner executed
+            decision = when {
+                failed > 0 || protectionFailed || failureFailed || stackingFailed -> RolloutDecision.NO_GO
+                groupResults.values.all { it.status == TestStatus.PASS } -> RolloutDecision.GO_V03_ACTIVE_B
+                groupResults[MatrixGroup.STACKING]?.status == TestStatus.PASS &&
+                        groupResults[MatrixGroup.PROTECTION]?.status == TestStatus.PASS -> RolloutDecision.GO_V02_ACTIVE_A
+                else -> RolloutDecision.GO_V01_OBSERVE
+            }
+
+            modelStatus = if (failed == 0) "PASS" else "FAIL"
+            readinessStatus = "PASS"
+            realStagingStatus = if (decision == RolloutDecision.GO_V03_ACTIVE_B) "PASS (SIMULATED MATRIX)" else "NOT RUN"
+            rolloutApprovalStatus = if (decision == RolloutDecision.GO_V03_ACTIVE_B) "APPROVED_FOR_STAGING" else "NOT GRANTED"
+
+            summary = when (decision) {
+                RolloutDecision.GO_V03_ACTIVE_B -> "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: SIMULATED MATRIX (Full equivalence matrix verified with 0 drift, 0 false-clean)"
+                RolloutDecision.GO_V02_ACTIVE_A -> "MODEL VALIDATION: PASS | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: MODULE A ONLY"
+                RolloutDecision.GO_V01_OBSERVE -> "MODEL VALIDATION: WARN | RUNTIME READINESS: PASS | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED"
+                RolloutDecision.NO_GO -> "MODEL VALIDATION: FAIL | RUNTIME READINESS: FAIL | REAL STAGING EQUIVALENCE: NOT RUN | ROLLOUT APPROVAL: NOT GRANTED (Equivalence matrix violation detected)"
+                else -> "MODEL VALIDATION: FAIL | ROLLOUT APPROVAL: NOT GRANTED"
+            }
         }
 
         return RolloutReport(
@@ -108,7 +146,12 @@ class RolloutValidator(
             passedTests = passed,
             warningTests = warnings,
             failedTests = failed,
-            totalTimeMs = totalTime
+            totalTimeMs = totalTime,
+            isReadinessOnly = isReadinessOnly,
+            modelValidationStatus = modelStatus,
+            runtimeReadinessStatus = readinessStatus,
+            realStagingEquivalenceStatus = realStagingStatus,
+            rolloutApprovalStatus = rolloutApprovalStatus
         )
     }
 

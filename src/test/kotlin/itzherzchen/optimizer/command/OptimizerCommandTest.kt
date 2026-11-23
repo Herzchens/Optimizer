@@ -221,7 +221,11 @@ class OptimizerCommandTest {
         assertTrue(result)
 
         val messages = captureMessages(sender)
-        assertTrue(messages.any { it.contains("Running Staging Equivalence Matrix") })
+        assertTrue(messages.any { it.contains("Staging") })
+        assertTrue(messages.any { it.contains("MODEL VALIDATION:") })
+        assertTrue(messages.any { it.contains("RUNTIME READINESS:") })
+        assertTrue(messages.any { it.contains("REAL STAGING EQUIVALENCE:") })
+        assertTrue(messages.any { it.contains("ROLLOUT APPROVAL:") })
         assertTrue(messages.any { it.contains("Rollout Decision") })
     }
 

@@ -184,4 +184,107 @@ class StagingRolloutIntegrationTest {
         val report = validator.runValidationMatrix()
         assertEquals(RolloutDecision.NO_GO, report.decision, "Unvalidated live state must fail closed to NO_GO")
     }
+
+    @Test
+    fun `readiness-only input can never yield authoritative v03 or v02 rollout decision`() {
+        val config = OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            stackedFastRejectEnabled = true,
+            blockAccountingFastPathEnabled = true,
+            expectedWildToolsSha256 = OptimizerConfig.DEFAULT_WT_SHA256,
+            expectedSuperiorSkyblockSha256 = OptimizerConfig.DEFAULT_SSB_SHA256,
+            expectedMinecraftVersion = OptimizerConfig.DEFAULT_MC_VERSION,
+            timingSampleRate = 64
+        )
+        val modeController = ModeController(OperatingMode.ACTIVE)
+        val circuitBreaker = CircuitBreaker(modeController)
+        val counters = Counters()
+        val compatibilityValidator = mock(CompatibilityValidator::class.java)
+
+        val perfectReport = itzherzchen.optimizer.bootstrap.FullValidationReport(
+            fingerprintResult = itzherzchen.optimizer.bootstrap.FingerprintResult(true, emptyList(), emptyList()),
+            listenerCensusResult = itzherzchen.optimizer.bootstrap.ListenerCensusResult(
+                isTopologyValid = true,
+                entries = emptyList(),
+                stackedBlocksIndex = 1,
+                blockChangesIndex = 2,
+                signsListenerIndex = 2,
+                protectionListenerIndex = 0,
+                discrepancies = emptyList()
+            ),
+            riskScanResult = itzherzchen.optimizer.observe.TransactionRiskReport(false, emptyList(), "No risk"),
+            isOverallCompatible = true,
+            recommendedMode = OperatingMode.ACTIVE
+        )
+        `when`(compatibilityValidator.runValidation()).thenReturn(perfectReport)
+
+        val validator = RolloutValidator(
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            validator = compatibilityValidator,
+            customRunner = null
+        )
+
+        val report = validator.runValidationMatrix()
+
+        // Invariant: Readiness audit MUST NOT claim v0.2 or v0.3 active rollout approval
+        assertNotEquals(RolloutDecision.GO_V03_ACTIVE_B, report.decision, "Readiness-only audit must NEVER yield GO_V03_ACTIVE_B")
+        assertNotEquals(RolloutDecision.GO_V02_ACTIVE_A, report.decision, "Readiness-only audit must NEVER yield GO_V02_ACTIVE_A")
+        assertEquals(RolloutDecision.READY_FOR_STAGING, report.decision)
+        assertTrue(report.isReadinessOnly)
+        assertEquals("NOT RUN", report.realStagingEquivalenceStatus)
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
+        assertFalse(report.summary.contains("0 drift verified"))
+    }
+
+    @Test
+    fun `readiness-only audit with transaction risk reports MODULE_B_BLOCKED`() {
+        val config = OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            stackedFastRejectEnabled = true,
+            blockAccountingFastPathEnabled = true,
+            expectedWildToolsSha256 = OptimizerConfig.DEFAULT_WT_SHA256,
+            expectedSuperiorSkyblockSha256 = OptimizerConfig.DEFAULT_SSB_SHA256,
+            expectedMinecraftVersion = OptimizerConfig.DEFAULT_MC_VERSION,
+            timingSampleRate = 64
+        )
+        val modeController = ModeController(OperatingMode.ACTIVE)
+        val circuitBreaker = CircuitBreaker(modeController)
+        val counters = Counters()
+        val compatibilityValidator = mock(CompatibilityValidator::class.java)
+
+        val reportWithRisk = itzherzchen.optimizer.bootstrap.FullValidationReport(
+            fingerprintResult = itzherzchen.optimizer.bootstrap.FingerprintResult(true, emptyList(), emptyList()),
+            listenerCensusResult = itzherzchen.optimizer.bootstrap.ListenerCensusResult(
+                isTopologyValid = true,
+                entries = emptyList(),
+                stackedBlocksIndex = 1,
+                blockChangesIndex = 2,
+                signsListenerIndex = 2,
+                protectionListenerIndex = 0,
+                discrepancies = emptyList()
+            ),
+            riskScanResult = itzherzchen.optimizer.observe.TransactionRiskReport(true, listOf("ExternalWandGuard"), "Found 1 external listeners on CuboidWandUseEvent"),
+            isOverallCompatible = true,
+            recommendedMode = OperatingMode.ACTIVE
+        )
+        `when`(compatibilityValidator.runValidation()).thenReturn(reportWithRisk)
+
+        val validator = RolloutValidator(
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            validator = compatibilityValidator,
+            customRunner = null
+        )
+
+        val report = validator.runValidationMatrix()
+
+        assertEquals(RolloutDecision.MODULE_B_BLOCKED, report.decision)
+        assertTrue(report.summary.contains("Module B blocked due to transaction risk"))
+        assertEquals("NOT GRANTED", report.rolloutApprovalStatus)
+    }
 }

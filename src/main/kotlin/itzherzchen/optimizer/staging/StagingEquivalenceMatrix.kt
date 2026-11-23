@@ -13,7 +13,11 @@ enum class RolloutDecision {
     GO_V03_ACTIVE_B,
     GO_V02_ACTIVE_A,
     GO_V01_OBSERVE,
-    NO_GO
+    NO_GO,
+    READY_FOR_STAGING,
+    MODULE_A_ELIGIBLE,
+    MODULE_B_BLOCKED,
+    NOT_READY
 }
 
 /**
@@ -70,5 +74,10 @@ data class RolloutReport(
     val passedTests: Int,
     val warningTests: Int,
     val failedTests: Int,
-    val totalTimeMs: Long
+    val totalTimeMs: Long,
+    val isReadinessOnly: Boolean = false,
+    val modelValidationStatus: String = "NOT RUN",
+    val runtimeReadinessStatus: String = "NOT RUN",
+    val realStagingEquivalenceStatus: String = "NOT RUN",
+    val rolloutApprovalStatus: String = "NOT GRANTED"
 )

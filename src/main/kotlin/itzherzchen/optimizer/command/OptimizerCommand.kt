@@ -206,8 +206,24 @@ class OptimizerCommand(
             return
         }
 
-        sender.sendMessage(Component.text("=== Running Staging Equivalence Matrix ===", NamedTextColor.GOLD))
         val report = rolloutValidator.runValidationMatrix()
+
+        val title = if (report.isReadinessOnly) {
+            "=== Optimizer Live Staging Readiness Audit ==="
+        } else {
+            "=== Optimizer Staging Equivalence Matrix ==="
+        }
+        sender.sendMessage(Component.text(title, NamedTextColor.GOLD))
+
+        // Explicit gate labels to separate readiness audit from equivalence approval
+        sender.sendMessage(Component.text("MODEL VALIDATION: ", NamedTextColor.GRAY)
+            .append(Component.text(report.modelValidationStatus, if (report.modelValidationStatus.startsWith("PASS")) NamedTextColor.GREEN else NamedTextColor.YELLOW)))
+        sender.sendMessage(Component.text("RUNTIME READINESS: ", NamedTextColor.GRAY)
+            .append(Component.text(report.runtimeReadinessStatus, if (report.runtimeReadinessStatus == "PASS") NamedTextColor.GREEN else NamedTextColor.RED)))
+        sender.sendMessage(Component.text("REAL STAGING EQUIVALENCE: ", NamedTextColor.GRAY)
+            .append(Component.text(report.realStagingEquivalenceStatus, if (report.realStagingEquivalenceStatus.startsWith("PASS")) NamedTextColor.GREEN else NamedTextColor.YELLOW)))
+        sender.sendMessage(Component.text("ROLLOUT APPROVAL: ", NamedTextColor.GRAY)
+            .append(Component.text(report.rolloutApprovalStatus, if (report.rolloutApprovalStatus.startsWith("APPROVED")) NamedTextColor.GREEN else NamedTextColor.RED)))
 
         for ((group, groupRes) in report.groupResults) {
             val color = when (groupRes.status) {
@@ -230,8 +246,12 @@ class OptimizerCommand(
         val decisionColor = when (report.decision) {
             itzherzchen.optimizer.staging.RolloutDecision.GO_V03_ACTIVE_B -> NamedTextColor.GREEN
             itzherzchen.optimizer.staging.RolloutDecision.GO_V02_ACTIVE_A -> NamedTextColor.AQUA
+            itzherzchen.optimizer.staging.RolloutDecision.READY_FOR_STAGING -> NamedTextColor.AQUA
+            itzherzchen.optimizer.staging.RolloutDecision.MODULE_A_ELIGIBLE -> NamedTextColor.AQUA
+            itzherzchen.optimizer.staging.RolloutDecision.MODULE_B_BLOCKED -> NamedTextColor.YELLOW
             itzherzchen.optimizer.staging.RolloutDecision.GO_V01_OBSERVE -> NamedTextColor.YELLOW
-            itzherzchen.optimizer.staging.RolloutDecision.NO_GO -> NamedTextColor.RED
+            itzherzchen.optimizer.staging.RolloutDecision.NO_GO,
+            itzherzchen.optimizer.staging.RolloutDecision.NOT_READY -> NamedTextColor.RED
         }
 
         sender.sendMessage(Component.text("Rollout Decision: ", NamedTextColor.GOLD)
