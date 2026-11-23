@@ -30,7 +30,7 @@ jobs:
             git fetch origin "${{ github.base_ref }}" --depth=1
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           else
-            git diff --check HEAD~1 HEAD
+            git show --check --format= HEAD
           fi
 
       - name: Verify forbidden tracked files

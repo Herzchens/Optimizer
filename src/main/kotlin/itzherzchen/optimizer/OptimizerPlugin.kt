@@ -98,7 +98,15 @@ class OptimizerPlugin : JavaPlugin() {
             counters,
             logger = logger
         )
-        actionTracker = CuboidActionTracker(actionContextStack, modeController, circuitBreaker, counters, timing, logger)
+        actionTracker = CuboidActionTracker(
+            actionContextStack,
+            modeController,
+            circuitBreaker,
+            counters,
+            timing,
+            logger = logger,
+            blockAccountingFastPath = blockAccountingFastPath
+        )
         listenerInstaller = SyntheticListenerInstaller(
             actionContextStack,
             modeController,

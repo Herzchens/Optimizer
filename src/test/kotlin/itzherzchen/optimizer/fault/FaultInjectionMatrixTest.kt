@@ -319,7 +319,8 @@ class FaultInjectionMatrixTest {
             actionContextStack = stack,
             modeController = modeController,
             circuitBreaker = circuitBreaker,
-            counters = counters
+            counters = counters,
+            primaryThreadChecker = { isPrimary }
         )
 
         // Install hooks
@@ -335,7 +336,7 @@ class FaultInjectionMatrixTest {
         // Uninstall against reloaded list: must detect drift and NOT clobber foreign list
         val result = installer.uninstall()
 
-        assertEquals(itzherzchen.optimizer.wildtools.UninstallResult.LIST_DRIFT_PRESERVED, result)
+        assertEquals(itzherzchen.optimizer.wildtools.UninstallResult.EXTERNAL_LIST_DRIFT, result)
         // Foreign entries must remain completely untouched
         assertEquals(foreignPlugin, originalList[1].plugin)
         assertEquals(foreignPlugin, originalList[2].plugin)
@@ -392,7 +393,7 @@ class FaultInjectionMatrixTest {
             discrepancies = listOf("Missing SSB NORMAL protection callback")
         )
 
-        val installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters)
+        val installer = SyntheticListenerInstaller(stack, modeController, circuitBreaker, counters, primaryThreadChecker = { isPrimary })
         val installResult = installer.install(rawList, invalidCensus)
 
         assertEquals(itzherzchen.optimizer.wildtools.InstallResult.INVALID_TOPOLOGY, installResult)

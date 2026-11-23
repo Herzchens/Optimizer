@@ -325,6 +325,96 @@ class RuntimeFingerprintTest {
         assertFalse(isLeaf)
     }
 
+    // --- EXACT LEAF SERVER FAMILY IDENTITY TESTS ---
+
+    @Test
+    fun `checkLeafServerFamily positive exact Winds-Studio Leaf 1_21_4 server passes`() {
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Leaf",
+            serverVersion = "git-Leaf-1234 (MC: 1.21.4)",
+            classProbe = { it == "org.dreeam.leaf.LeafConfig" }
+        )
+        assertTrue(isLeaf)
+        assertTrue(details.contains("Approved Leaf server family verified"))
+    }
+
+    @Test
+    fun `checkLeafServerFamily positive with alternate leaf config class passes`() {
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Leaf",
+            serverVersion = "git-Leaf-5678",
+            classProbe = { it == "org.dreeam.leaf.config.LeafConfig" }
+        )
+        assertTrue(isLeaf)
+        assertTrue(details.contains("Approved Leaf server family verified"))
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative Paper server fails`() {
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Paper",
+            serverVersion = "git-Paper-456 (MC: 1.21.4)",
+            classProbe = { false }
+        )
+        assertFalse(isLeaf)
+        assertTrue(details.contains("is not the approved Leaf server family"))
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative Purpur server fails`() {
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Purpur",
+            serverVersion = "git-Purpur-2345",
+            classProbe = { false }
+        )
+        assertFalse(isLeaf)
+        assertTrue(details.contains("is not the approved Leaf server family"))
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative Gale server fails`() {
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Gale",
+            serverVersion = "git-Gale-100",
+            classProbe = { false }
+        )
+        assertFalse(isLeaf)
+        assertTrue(details.contains("is not the approved Leaf server family"))
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative version spoof where brand is Paper fails`() {
+        // Spoof attempt: serverVersion starts with git-Leaf, but server name is Paper
+        val (isLeaf, _) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Paper",
+            serverVersion = "git-Leaf-fake",
+            classProbe = { false }
+        )
+        assertFalse(isLeaf, "Version spoof must be rejected when brand is not Leaf")
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative brand spoof where version is git-Paper fails`() {
+        // Spoof attempt: server name is Leaf, but version is git-Paper
+        val (isLeaf, _) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Leaf",
+            serverVersion = "git-Paper-999",
+            classProbe = { true }
+        )
+        assertFalse(isLeaf, "Brand spoof must be rejected when version does not begin with git-Leaf")
+    }
+
+    @Test
+    fun `checkLeafServerFamily negative brand spoof with no leaf class fails`() {
+        // Spoof attempt: brand is Leaf, version is git-Leaf, but LeafConfig class does not exist
+        val (isLeaf, _) = RuntimeFingerprint.checkLeafServerFamily(
+            serverName = "Leaf",
+            serverVersion = "git-Leaf-1234",
+            classProbe = { false }
+        )
+        assertFalse(isLeaf, "Brand spoof must be rejected when LeafConfig class is absent")
+    }
+
     @Test
     fun `top level fingerprint exception fails closed safely`() {
         val config = OptimizerConfig(

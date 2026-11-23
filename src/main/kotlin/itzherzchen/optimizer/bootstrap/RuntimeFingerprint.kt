@@ -110,11 +110,11 @@ class RuntimeFingerprint(
             }
 
             // 3. WildTools plugin presence, classloader, and original artifact hash check
-            val wtPlugin = try { Bukkit.getPluginManager()?.getPlugin("WildTools") } catch (_: Exception) { null }
+            val wtPlugin = try { Bukkit.getPluginManager().getPlugin("WildTools") } catch (_: Exception) { null }
             if (wtPlugin == null || !wtPlugin.isEnabled) {
                 record("WildTools Enabled", false, "WildTools plugin is not loaded or not enabled")
             } else {
-                val wtVersion = try { wtPlugin.description.version } catch (_: Throwable) { "unknown" }
+                val wtVersion = try { wtPlugin.pluginMeta.version } catch (_: Throwable) { @Suppress("DEPRECATION") wtPlugin.description.version }
                 record("WildTools Enabled", true, "WildTools version $wtVersion is enabled")
 
                 // Check classloader
@@ -139,11 +139,11 @@ class RuntimeFingerprint(
             }
 
             // 4. SuperiorSkyblock2 plugin presence, classloader, and original artifact hash check
-            val ssbPlugin = try { Bukkit.getPluginManager()?.getPlugin("SuperiorSkyblock2") } catch (_: Exception) { null }
+            val ssbPlugin = try { Bukkit.getPluginManager().getPlugin("SuperiorSkyblock2") } catch (_: Exception) { null }
             if (ssbPlugin == null || !ssbPlugin.isEnabled) {
                 record("SuperiorSkyblock2 Enabled", false, "SuperiorSkyblock2 plugin is not loaded or not enabled")
             } else {
-                val ssbVersion = try { ssbPlugin.description.version } catch (_: Throwable) { "unknown" }
+                val ssbVersion = try { ssbPlugin.pluginMeta.version } catch (_: Throwable) { @Suppress("DEPRECATION") ssbPlugin.description.version }
                 record("SuperiorSkyblock2 Enabled", true, "SuperiorSkyblock2 version $ssbVersion is enabled")
 
                 // Check classloader
@@ -225,7 +225,7 @@ class RuntimeFingerprint(
             record(
                 "WildTools claimingPluginsBreakMethods Type",
                 isList,
-                "claimingPluginsBreakMethods is ${if (isList) "List (${list?.javaClass?.name})" else "not a List (${list?.javaClass?.name})"}"
+                "claimingPluginsBreakMethods is ${if (isList) "List (${list.javaClass.name})" else "not a List (${list?.javaClass?.name})"}"
             )
         } catch (e: Exception) {
             record("WildTools Structure Reflection", false, "Reflection failed: ${e.message}")
@@ -313,27 +313,28 @@ class RuntimeFingerprint(
          * Generic Paper, Gale, Purpur, or Spigot servers without Leaf's specific patchset
          * fail this check closed to ensure optimization safety.
          */
-        fun checkLeafServerFamily(): Pair<Boolean, String> {
-            val serverName = try { Bukkit.getName() } catch (_: Throwable) { "" }
-            val serverVersion = try { Bukkit.getVersion() } catch (_: Throwable) { "" }
-
+        fun checkLeafServerFamily(
+            serverName: String = try { Bukkit.getName() } catch (_: Throwable) { "" },
+            serverVersion: String = try { Bukkit.getVersion() } catch (_: Throwable) { "" },
+            classProbe: (String) -> Boolean = { className ->
+                try {
+                    Class.forName(className) != null
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+        ): Pair<Boolean, String> {
             val isExactLeafName = serverName.equals("Leaf", ignoreCase = true)
             val isExactLeafVersion = serverVersion.startsWith("git-Leaf-", ignoreCase = true) ||
                     serverVersion.startsWith("git-Leaf ", ignoreCase = true)
 
-            val hasLeafConfigClass = try {
-                Class.forName("org.dreeam.leaf.LeafConfig") != null
-            } catch (_: Throwable) {
-                false
-            }
-            val hasAltLeafConfigClass = try {
-                Class.forName("org.dreeam.leaf.config.LeafConfig") != null
-            } catch (_: Throwable) {
-                false
-            }
+            val hasLeafConfigClass = classProbe("org.dreeam.leaf.LeafConfig")
+            val hasAltLeafConfigClass = classProbe("org.dreeam.leaf.config.LeafConfig")
             val hasLeafClass = hasLeafConfigClass || hasAltLeafConfigClass
 
-            val isLeaf = (isExactLeafName || isExactLeafVersion) && (hasLeafClass || isExactLeafVersion)
+            // Strict fail-closed verification: requires exact brand 'Leaf', git-Leaf version tag, AND Leaf configuration class.
+            // Bypasses via version spoof or brand spoof without the authentic codebase are strictly rejected.
+            val isLeaf = isExactLeafName && isExactLeafVersion && hasLeafClass
 
             return if (isLeaf) {
                 true to "Approved Leaf server family verified (brand='$serverName', version='$serverVersion', leafConfigClass=$hasLeafClass)"

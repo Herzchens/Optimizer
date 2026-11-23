@@ -313,4 +313,97 @@ class CuboidActionTrackerTest {
         tracker.onRootBlockBreakMonitor(rootEvent)
         assertEquals(1L, counters.cuboidRootCompleted.sum())
     }
+
+    @Test
+    fun `action-boundary check monotonically disables Module B when dynamic CuboidWandUseEvent listener appears without PluginEnableEvent`() {
+        var scannerState = itzherzchen.optimizer.observe.TransactionRiskState.CLEAN
+        val riskScannerMock = mock(itzherzchen.optimizer.observe.TransactionRiskScanner::class.java)
+        `when`(riskScannerMock.scan()).thenAnswer {
+            itzherzchen.optimizer.observe.TransactionRiskReport(
+                scannerState,
+                if (scannerState == itzherzchen.optimizer.observe.TransactionRiskState.RISK_FOUND) listOf("DynamicWandListener") else emptyList(),
+                "Action boundary audit"
+            )
+        }
+
+        val config = itzherzchen.optimizer.config.OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            blockAccountingFastPathEnabled = true
+        )
+        val accounting = itzherzchen.optimizer.superior.BlockAccountingFastPath(
+            config, modeController, circuitBreaker, stack, counters, primaryThreadChecker = { true }
+        )
+        accounting.isEligible = true
+
+        val guardedTracker = CuboidActionTracker(
+            actionContextStack = stack,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            primaryThreadChecker = { true },
+            cuboidToolResolver = { cuboidToolMock },
+            toolBreaksTrackerCheck = { false },
+            integrityChecker = { true },
+            blockAccountingFastPath = accounting,
+            riskScanner = riskScannerMock
+        )
+
+        // 1. Initial action: scanner is CLEAN -> Module B remains eligible
+        val (_, event1) = createPlayerWithTool("DIAMOND_PICKAXE")
+        guardedTracker.onRootBlockBreakLowest(event1)
+        assertTrue(accounting.isEligible, "Module B must remain eligible when action boundary scan is clean")
+        guardedTracker.onRootBlockBreakMonitor(event1)
+
+        // 2. Dynamic listener added without PluginEnableEvent -> scanner reports RISK_FOUND
+        scannerState = itzherzchen.optimizer.observe.TransactionRiskState.RISK_FOUND
+        val (_, event2) = createPlayerWithTool("DIAMOND_PICKAXE")
+        guardedTracker.onRootBlockBreakLowest(event2)
+        assertFalse(accounting.isEligible, "Module B must be monotonically disabled at action boundary on foreign listener detection")
+        guardedTracker.onRootBlockBreakMonitor(event2)
+
+        // 3. Foreign listener later removed -> Module B must NOT hot re-enable (monotonic!)
+        scannerState = itzherzchen.optimizer.observe.TransactionRiskState.CLEAN
+        val (_, event3) = createPlayerWithTool("DIAMOND_PICKAXE")
+        guardedTracker.onRootBlockBreakLowest(event3)
+        assertFalse(accounting.isEligible, "Module B must stay monotonically disabled until restart")
+        guardedTracker.onRootBlockBreakMonitor(event3)
+    }
+
+    @Test
+    fun `action-boundary check monotonically disables Module B when risk scanner reports SCAN_FAILED`() {
+        val riskScannerMock = mock(itzherzchen.optimizer.observe.TransactionRiskScanner::class.java)
+        `when`(riskScannerMock.scan()).thenReturn(
+            itzherzchen.optimizer.observe.TransactionRiskReport(
+                itzherzchen.optimizer.observe.TransactionRiskState.SCAN_FAILED,
+                emptyList(),
+                "Reflection failed"
+            )
+        )
+
+        val config = itzherzchen.optimizer.config.OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            blockAccountingFastPathEnabled = true
+        )
+        val accounting = itzherzchen.optimizer.superior.BlockAccountingFastPath(
+            config, modeController, circuitBreaker, stack, counters, primaryThreadChecker = { true }
+        )
+        accounting.isEligible = true
+
+        val guardedTracker = CuboidActionTracker(
+            actionContextStack = stack,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            primaryThreadChecker = { true },
+            cuboidToolResolver = { cuboidToolMock },
+            toolBreaksTrackerCheck = { false },
+            integrityChecker = { true },
+            blockAccountingFastPath = accounting,
+            riskScanner = riskScannerMock
+        )
+
+        val (_, event) = createPlayerWithTool("DIAMOND_PICKAXE")
+        guardedTracker.onRootBlockBreakLowest(event)
+        assertFalse(accounting.isEligible, "Module B must be refused when action boundary risk scan fails")
+    }
 }

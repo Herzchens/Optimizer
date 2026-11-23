@@ -459,7 +459,7 @@ class StagingEquivalenceMatrixRunner : StagingRunner {
                 discrepancies = emptyList()
             )
 
-            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters)
+            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters, primaryThreadChecker = { env.isPrimary })
             val installed = installer.install(rawList, census)
 
             // Simulate SSB reload replacing entries
@@ -468,7 +468,7 @@ class StagingEquivalenceMatrixRunner : StagingRunner {
 
             val uninstalled = installer.uninstall()
 
-            if (installed == InstallResult.SUCCESS && uninstalled == UninstallResult.LIST_DRIFT_PRESERVED && rawList[1].plugin === reloadedPlugin) {
+            if (installed == InstallResult.SUCCESS && uninstalled == UninstallResult.EXTERNAL_LIST_DRIFT && rawList[1].plugin === reloadedPlugin) {
                 CaseExecution(TestStatus.PASS, "SSB reload list drift detected; preserved reloaded listeners without clobbering.")
             } else {
                 CaseExecution(TestStatus.FAIL, "SSB reload handling failed: installed=$installed, uninstalled=$uninstalled")
@@ -499,7 +499,7 @@ class StagingEquivalenceMatrixRunner : StagingRunner {
 
         results.add(runCase("LIF-07", "Classloader Drift Detection", MatrixGroup.LIFECYCLE) {
             val env = IsolatedEnvironment()
-            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters)
+            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters, primaryThreadChecker = { env.isPrimary })
             val preflight = installer.verifyIntegrity()
 
             if (preflight == PreflightResult.OK) {
@@ -652,7 +652,7 @@ class StagingEquivalenceMatrixRunner : StagingRunner {
             )
 
             val env = IsolatedEnvironment()
-            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters)
+            val installer = SyntheticListenerInstaller(env.stack, env.modeController, env.circuitBreaker, env.counters, primaryThreadChecker = { env.isPrimary })
             val result = installer.install(rawList, census)
 
             if (result == InstallResult.INVALID_TOPOLOGY) {

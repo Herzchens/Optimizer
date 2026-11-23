@@ -1,6 +1,7 @@
 package itzherzchen.optimizer.parity
 
 import itzherzchen.optimizer.bootstrap.RuntimeFingerprint
+import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -213,6 +214,74 @@ class VendorParityTest {
                     realField.type.name,
                     "Type mismatch for field '${stubField.name}' on class $className"
                 )
+            }
+        }
+    }
+
+    @Test
+    fun `SyntheticListenerInstaller default thread checker fails closed`() {
+        val modeController = itzherzchen.optimizer.runtime.ModeController()
+        val breaker = itzherzchen.optimizer.runtime.CircuitBreaker(modeController)
+        val counters = itzherzchen.optimizer.observe.Counters()
+        val stack = itzherzchen.optimizer.runtime.ActionContextStack(breaker, counters, primaryThreadChecker = { true })
+
+        val defaultInstaller = itzherzchen.optimizer.wildtools.SyntheticListenerInstaller(
+            stack, modeController, breaker, counters
+        )
+        val dummyList = java.util.LinkedList<org.bukkit.plugin.RegisteredListener>()
+        val dummyCensus = itzherzchen.optimizer.bootstrap.ListenerCensusResult(
+            isTopologyValid = false,
+            entries = emptyList(),
+            stackedBlocksIndex = -1,
+            blockChangesIndex = -1,
+            signsListenerIndex = -1,
+            protectionListenerIndex = -1,
+            discrepancies = emptyList()
+        )
+        val result = defaultInstaller.install(dummyList, dummyCensus)
+        assertEquals(
+            itzherzchen.optimizer.wildtools.InstallResult.THREAD_SAFETY_VIOLATION,
+            result,
+            "SyntheticListenerInstaller must fail closed with THREAD_SAFETY_VIOLATION when unable to prove primary thread"
+        )
+    }
+
+    @Test
+    fun `Optimizer compiled bytecode references to vendor APIs exist in real vendor binaries`() {
+        val libsDir = File("libs")
+        val wtJar = File(libsDir, WT_JAR_NAME)
+        val ssbJar = File(libsDir, SSB_JAR_NAME)
+        if (!wtJar.exists() || !ssbJar.exists()) {
+            return
+        }
+
+        val mainClassesDir = File("build/classes/kotlin/main")
+        if (!mainClassesDir.exists()) {
+            return
+        }
+
+        val vendorClassLoader = URLClassLoader(
+            arrayOf(mainClassesDir.toURI().toURL(), wtJar.toURI().toURL(), ssbJar.toURI().toURL()),
+            org.bukkit.Bukkit::class.java.classLoader
+        )
+
+        val optimizerClasses = mainClassesDir.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".class") }
+            .map { file ->
+                val relPath = file.relativeTo(mainClassesDir).path
+                relPath.removeSuffix(".class").replace(File.separatorChar, '.')
+            }
+            .toList()
+
+        assertTrue(optimizerClasses.isNotEmpty(), "Compiled Optimizer classes must exist")
+
+        for (className in optimizerClasses) {
+            val clazz = Class.forName(className, false, vendorClassLoader)
+            assertNotNull(clazz, "Class $className must load cleanly against vendor classloader")
+            assertDoesNotThrow {
+                clazz.declaredMethods
+                clazz.declaredFields
+                clazz.declaredConstructors
             }
         }
     }

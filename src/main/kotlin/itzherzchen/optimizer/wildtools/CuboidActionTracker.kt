@@ -60,7 +60,9 @@ class CuboidActionTracker(
             null
         }
     },
-    var integrityChecker: (() -> Boolean)? = null
+    var integrityChecker: (() -> Boolean)? = null,
+    var blockAccountingFastPath: itzherzchen.optimizer.superior.BlockAccountingFastPath? = null,
+    private val riskScanner: itzherzchen.optimizer.observe.TransactionRiskScanner = itzherzchen.optimizer.observe.TransactionRiskScanner(logger = logger)
 ) : Listener {
 
     private val actionIdSequence = AtomicLong(0)
@@ -111,6 +113,19 @@ class CuboidActionTracker(
 
         // Record observable candidate metric
         counters.cuboidRootCandidates.increment()
+
+        // Cheap action-boundary fail-closed guard for Module B listener topology
+        val accounting = blockAccountingFastPath
+        if (accounting != null && accounting.isEligible) {
+            val riskReport = riskScanner.scan()
+            if (riskReport.state != itzherzchen.optimizer.observe.TransactionRiskState.CLEAN) {
+                accounting.isEligible = false
+                logger?.warning(
+                    "[Optimizer] Action-boundary transaction guard detected risk on CuboidWandUseEvent " +
+                            "(${riskReport.state}: ${riskReport.riskSummary}). Module B monotonically disabled; restart required."
+                )
+            }
+        }
 
         // Live identity preflight validation before every root Cuboid action
         val checker = integrityChecker

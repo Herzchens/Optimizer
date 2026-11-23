@@ -75,7 +75,7 @@ class SyntheticListenerInstaller(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            Bukkit.getServer() == null
+            false
         }
     }
 ) {
@@ -308,6 +308,11 @@ class SyntheticListenerInstaller(
         rawList: MutableList<RegisteredListener>,
         censusResult: ListenerCensusResult
     ): InstallResult {
+        if (!primaryThreadChecker()) {
+            logger?.severe("[Optimizer] SyntheticListenerInstaller.install called off-main-thread! Rejecting installation.")
+            return InstallResult.THREAD_SAFETY_VIOLATION
+        }
+
         val existingToken = censusResult.token
         if (existingToken != null) {
             if (existingToken.targetList !== rawList) {
@@ -333,12 +338,12 @@ class SyntheticListenerInstaller(
         val origStacked = rawList[sIndex]
         val origMonitor = rawList[mIndex]
 
-        if (origStacked.priority != EventPriority.HIGHEST || origStacked.plugin?.name != "SuperiorSkyblock2") {
+        if (origStacked.priority != EventPriority.HIGHEST || origStacked.plugin.name != "SuperiorSkyblock2") {
             logger?.severe("[Optimizer] Target stacked listener at index $sIndex does not match expected SSB HIGHEST callback!")
             return InstallResult.INVALID_TOPOLOGY
         }
 
-        if (origMonitor.priority != EventPriority.MONITOR || origMonitor.plugin?.name != "SuperiorSkyblock2") {
+        if (origMonitor.priority != EventPriority.MONITOR || origMonitor.plugin.name != "SuperiorSkyblock2") {
             logger?.severe("[Optimizer] Target monitor listener at index $mIndex does not match expected SSB MONITOR callback!")
             return InstallResult.INVALID_TOPOLOGY
         }

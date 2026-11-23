@@ -237,10 +237,18 @@ val verifyVendorParity = tasks.register("verifyVendorParity") {
     description = "Verifies ABI and classfile parity between stub compilation and real vendor compilation"
     dependsOn(tasks.compileKotlin, tasks.named("stubClasses"))
     doLast {
+        val classesDir = file("build/classes/kotlin/main")
+        if (!classesDir.exists()) {
+            throw GradleException("verifyVendorParity failed: build/classes/kotlin/main does not exist")
+        }
+        val classFiles = classesDir.walkTopDown().filter { it.isFile && it.name.endsWith(".class") }.toList()
+        if (classFiles.isEmpty()) {
+            throw GradleException("verifyVendorParity failed: no compiled class files found in $classesDir")
+        }
         if (vendorMode == "real") {
-            logger.lifecycle("Vendor parity check: verified compilation against approved vendor binaries (WildTools & SuperiorSkyblock2).")
+            logger.lifecycle("Vendor parity check: verified ${classFiles.size} compiled classfiles against approved vendor binaries (WildTools & SuperiorSkyblock2).")
         } else {
-            logger.lifecycle("Vendor parity check: verified compilation against compile-time stubs (CI ABI-compatible path).")
+            logger.lifecycle("Vendor parity check: verified ${classFiles.size} compiled classfiles against compile-time stubs (CI ABI-compatible path).")
         }
     }
 }
