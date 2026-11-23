@@ -17,10 +17,21 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
 
-      - name: Git diff check
-        run: git diff --check
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@42ebad84b0585498c0413b0967cf4e80ec0e1d19 # v4.4.1
+
+      - name: Git diff / whitespace check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git diff --check HEAD~1 HEAD
+          fi
 
       - name: Verify forbidden tracked files
         run: |
@@ -42,7 +53,7 @@ jobs:
           fi
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -51,7 +62,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run compilation and test suite with Gradle
-        run: ./gradlew build --no-daemon --stacktrace
+        run: ./gradlew build -PvendorMode=stub --no-daemon --stacktrace
 
       - name: Verify deployable artifact packaging
         run: |
@@ -79,6 +90,13 @@ jobs:
             echo "Error: SuperiorSkyblock2 implementation classes found in deployable artifact!"
             exit 1
           fi
+
+          echo "Verifying Build-Vendor-Mode attribute in MANIFEST.MF..."
+          unzip -p "$JAR_FILE" META-INF/MANIFEST.MF | grep -F "Build-Vendor-Mode: stub" || {
+            echo "Error: Build-Vendor-Mode: stub missing from MANIFEST.MF"
+            exit 1
+          }
+
           echo "Artifact packaging verification passed successfully!"
 
       - name: Generate SHA-256 checksums
@@ -89,7 +107,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Upload validated CI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: optimizer-snapshot-artifact
           path: |

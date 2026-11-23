@@ -6,20 +6,30 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish-release:
-    name: Publish Release
+  build-and-verify:
+    name: Build & Verify Release Candidate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.parse_version.outputs.tag }}
+      version: ${{ steps.parse_version.outputs.version }}
 
     steps:
-      - name: Checkout tagged commit
-        uses: actions/checkout@v4
+      - name: Checkout tagged commit and history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
-      - name: Git diff check
-        run: git diff --check
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@42ebad84b0585498c0413b0967cf4e80ec0e1d19 # v4.4.1
+
+      - name: Git diff / whitespace check
+        run: git show --check --format= HEAD
 
       - name: Verify forbidden tracked files
         run: |
@@ -59,8 +69,54 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release tag is annotated tag object
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          TAG_TYPE=$(git cat-file -t "refs/tags/$TAG" 2>/dev/null || true)
+          echo "Tag object type: '$TAG_TYPE'"
+          if [ "$TAG_TYPE" != "tag" ]; then
+            echo "Error: Tag '$TAG' is not an annotated tag object (found '$TAG_TYPE'). Lightweight tags are strictly forbidden."
+            exit 1
+          fi
+
+      - name: Verify release tag cryptographic signature
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Configuring approved SSH allowed signers..."
+          ALLOWED_SIGNERS_FILE="${RUNNER_TEMP}/allowed_signers"
+          echo "166841132+Herzchens@users.noreply.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMwKdHjkKqlWReNnF5Hz6GmWWCkZqx9sNklZuAeMPiRD herzchen@ItzHerzchen" > "$ALLOWED_SIGNERS_FILE"
+          git config gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS_FILE"
+
+          echo "Verifying cryptographic signature on tag '$TAG'..."
+          TAG_VERIFY_OUTPUT=$(git tag -v "$TAG" 2>&1) || {
+            echo "Error: git tag verification failed!"
+            echo "$TAG_VERIFY_OUTPUT"
+            exit 1
+          }
+          echo "$TAG_VERIFY_OUTPUT"
+          if ! echo "$TAG_VERIFY_OUTPUT" | grep -q 'Good "git" signature for 166841132+Herzchens@users.noreply.github.com'; then
+            echo "Error: Tag signature does not match approved release owner identity!"
+            exit 1
+          fi
+          echo "Cryptographic signature verified successfully for approved owner identity."
+
+      - name: Verify release tag belongs to main branch history
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          git fetch origin main --depth=200 || git fetch origin main --unshallow
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+          echo "Tag target commit: $TAG_COMMIT"
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "Error: Tagged commit $TAG_COMMIT is NOT reachable from origin/main!"
+            exit 1
+          fi
+          echo "Verified: Tagged commit $TAG_COMMIT belongs to origin/main branch history."
+
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -71,7 +127,7 @@ jobs:
       - name: Build release binary and run full test suite
         run: |
           VERSION="${{ steps.parse_version.outputs.version }}"
-          ./gradlew build "-PreleaseVersion=${VERSION}" --no-daemon --stacktrace
+          ./gradlew build "-PreleaseVersion=${VERSION}" -PvendorMode=stub --no-daemon --stacktrace
 
       - name: Verify deployable release artifact packaging and version equality
         run: |
@@ -109,6 +165,13 @@ jobs:
             echo "Error: Version mismatch! plugin.yml has '$PLUGIN_YML_VERSION', expected '$VERSION'"
             exit 1
           fi
+
+          echo "Verifying Build-Vendor-Mode attribute in MANIFEST.MF..."
+          unzip -p "$JAR_FILE" META-INF/MANIFEST.MF | grep -F "Build-Vendor-Mode: stub" || {
+            echo "Error: Build-Vendor-Mode: stub missing from MANIFEST.MF"
+            exit 1
+          }
+
           echo "Packaging and version verification passed successfully!"
 
       - name: Calculate SHA-256 checksums
@@ -119,15 +182,40 @@ jobs:
           sha256sum "Optimizer-${VERSION}.jar" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Upload verified release artifacts
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: optimizer-release-${{ steps.parse_version.outputs.version }}
+          path: |
+            build/libs/Optimizer-${{ steps.parse_version.outputs.version }}.jar
+            build/libs/SHA256SUMS.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Approved Release
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
+        with:
+          name: optimizer-release-${{ needs.build-and-verify.outputs.version }}
+          path: release-artifacts
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.parse_version.outputs.tag }}
-          VERSION: ${{ steps.parse_version.outputs.version }}
+          TAG: ${{ needs.build-and-verify.outputs.tag }}
+          VERSION: ${{ needs.build-and-verify.outputs.version }}
         run: |
           set -e
           gh release create "$TAG" \
-            "build/libs/Optimizer-${VERSION}.jar" \
-            "build/libs/SHA256SUMS.txt" \
+            "release-artifacts/Optimizer-${VERSION}.jar" \
+            "release-artifacts/SHA256SUMS.txt" \
             --title "Optimizer $TAG" \
             --generate-notes

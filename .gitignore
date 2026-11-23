@@ -22,7 +22,7 @@
 
 # Gradle and build outputs
 .gradle/
-build/
+/build/
 out/
 
 # IDE files
@@ -42,5 +42,3 @@ replay_pid*
 
 # Local-only project documents and agent working files
 local_*
-
-

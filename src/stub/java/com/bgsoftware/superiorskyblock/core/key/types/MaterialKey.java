@@ -31,4 +31,3 @@ public class MaterialKey implements Key {
         return 0;
     }
 }
-

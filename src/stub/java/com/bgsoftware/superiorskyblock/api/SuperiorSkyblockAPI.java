@@ -29,4 +29,3 @@ public final class SuperiorSkyblockAPI {
         return plugin == null ? null : plugin.getKeys();
     }
 }
-
