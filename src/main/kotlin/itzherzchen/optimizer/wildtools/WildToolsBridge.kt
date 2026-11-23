@@ -25,15 +25,38 @@ class WildToolsBridge(
     val actionContextStack: ActionContextStack,
     val actionTracker: CuboidActionTracker,
     val listenerInstaller: SyntheticListenerInstaller,
-    private val logger: Logger? = null
+    private val logger: Logger? = null,
+    private val dependencyChecker: () -> Boolean = {
+        try {
+            val pm = Bukkit.getPluginManager()
+            val wt = pm?.getPlugin("WildTools")
+            val ssb = pm?.getPlugin("SuperiorSkyblock2")
+            wt != null && wt.isEnabled && ssb != null && ssb.isEnabled
+        } catch (_: Throwable) {
+            false
+        }
+    },
+    private val listProvider: () -> MutableList<RegisteredListener>? = {
+        try {
+            val wt = Bukkit.getPluginManager()?.getPlugin("WildTools")
+            if (wt != null) getClaimingPluginsBreakMethods(wt) else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
 ) {
     var isHooked: Boolean = false
         private set
+
+    init {
+        actionTracker.integrityChecker = { verifyIntegrity() == PreflightResult.OK }
+    }
 
     /**
      * Initializes the bridge and registers root event listeners.
      */
     fun initialize() {
+        actionTracker.integrityChecker = { verifyIntegrity() == PreflightResult.OK }
         try {
             Bukkit.getPluginManager().registerEvents(actionTracker, plugin)
             logger?.info("[Optimizer] CuboidActionTracker registered for root block breaks.")
@@ -90,9 +113,50 @@ class WildToolsBridge(
 
     /**
      * Verifies that the installed wrappers have not drifted due to external list modification or reload.
+     * Evaluates live identity before root actions:
+     * - installed wrapper identities occupy expected slots
+     * - required dependencies remain enabled
+     * - expected live listener state still exists
+     * - integration has not been externally replaced/reloaded
      */
     fun verifyIntegrity(): PreflightResult {
-        if (!isHooked) return PreflightResult.OK
+        if (!isHooked) {
+            if (modeController.mode == itzherzchen.optimizer.runtime.OperatingMode.ACTIVE) {
+                counters.validationFailures.increment()
+                circuitBreaker.trip(
+                    itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                    "WildToolsBridge is not hooked while in ACTIVE mode. Disarming system."
+                )
+                disarm("Uninstalled hooks in ACTIVE mode")
+                return PreflightResult.FAILED_NOT_INSTALLED
+            }
+            return PreflightResult.OK
+        }
+
+        // 1. Required dependencies remain enabled
+        if (!dependencyChecker()) {
+            counters.validationFailures.increment()
+            circuitBreaker.trip(
+                itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                "Required dependencies (WildTools/SuperiorSkyblock2) are disabled or missing. Disarming system."
+            )
+            disarm("Required dependencies disabled or missing")
+            return PreflightResult.FAILED_DEPENDENCY_DISABLED
+        }
+
+        // 2. Integration replaced / reloaded check
+        val currentLiveList = listProvider()
+        if (currentLiveList == null || currentLiveList !== listenerInstaller.targetList) {
+            counters.validationFailures.increment()
+            circuitBreaker.trip(
+                itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                "WildTools claimingPluginsBreakMethods list was externally replaced or reloaded. Disarming system."
+            )
+            disarm("WildTools integration externally replaced or reloaded")
+            return PreflightResult.FAILED_INTEGRATION_REPLACED
+        }
+
+        // 3. Wrapper identities occupy expected slots & live listener state intact
         val result = listenerInstaller.verifyIntegrity()
         if (result != PreflightResult.OK) {
             counters.validationFailures.increment()
@@ -101,8 +165,10 @@ class WildToolsBridge(
                 "WildTools listener integrity verification failed: $result. Disarming system."
             )
             disarm("Listener integrity check failed ($result)")
+            return result
         }
-        return result
+
+        return PreflightResult.OK
     }
 
     companion object {

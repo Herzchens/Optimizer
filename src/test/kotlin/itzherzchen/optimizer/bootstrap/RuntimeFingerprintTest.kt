@@ -107,4 +107,61 @@ class RuntimeFingerprintTest {
         assertTrue(resolvedFile.exists())
         assertEquals("test jar content", resolvedFile.readText())
     }
+
+    @Test
+    fun `approved Leaf server family brand passes check`() {
+        val config = OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            stackedFastRejectEnabled = true,
+            blockAccountingFastPathEnabled = true,
+            expectedWildToolsSha256 = "dummy",
+            expectedSuperiorSkyblockSha256 = "dummy",
+            expectedMinecraftVersion = "1.21.4",
+            timingSampleRate = 64
+        )
+
+        val fingerprint = RuntimeFingerprint(
+            config = config,
+            serverFamilyChecker = { true to "Approved Leaf server family verified (brand='Leaf', version='git-Leaf-1234')" }
+        )
+        val result = fingerprint.validate()
+
+        val leafCheck = result.checks.find { it.name == "Server Family (Leaf)" }
+        assertNotNull(leafCheck)
+        assertEquals(InvariantStatus.PASS, leafCheck!!.status)
+        assertTrue(leafCheck.details.contains("Approved Leaf server family verified"))
+    }
+
+    @Test
+    fun `unexpected Paper or fork server brand fails check and refuses ACTIVE`() {
+        val config = OptimizerConfig(
+            configuredMode = OperatingMode.ACTIVE,
+            stackedFastRejectEnabled = true,
+            blockAccountingFastPathEnabled = true,
+            expectedWildToolsSha256 = "dummy",
+            expectedSuperiorSkyblockSha256 = "dummy",
+            expectedMinecraftVersion = "1.21.4",
+            timingSampleRate = 64
+        )
+
+        val fingerprint = RuntimeFingerprint(
+            config = config,
+            serverFamilyChecker = { false to "Server implementation 'Paper' (git-Paper-456) is not the approved Leaf server family. ACTIVE mode refused." }
+        )
+        val result = fingerprint.validate()
+
+        assertFalse(result.isCompatible)
+        val leafCheck = result.checks.find { it.name == "Server Family (Leaf)" }
+        assertNotNull(leafCheck)
+        assertEquals(InvariantStatus.FAIL, leafCheck!!.status)
+        assertTrue(result.failureReasons.any { it.contains("not the approved Leaf server family") })
+    }
+
+    @Test
+    fun `headless execution without live Bukkit fails closed safely without crashing`() {
+        // Default serverFamilyChecker runs in headless unit environment
+        val (isLeaf, details) = RuntimeFingerprint.checkLeafServerFamily()
+        assertFalse(isLeaf, "Headless execution without Leaf runtime must fail closed")
+        assertTrue(details.contains("not the approved Leaf server family") || details.contains("Failed to query"))
+    }
 }

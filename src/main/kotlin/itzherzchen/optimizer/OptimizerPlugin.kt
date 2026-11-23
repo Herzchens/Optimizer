@@ -162,6 +162,16 @@ class OptimizerPlugin : JavaPlugin() {
 
         // 6. Initial Boot Validation & Safe Hook Installation
         val validationReport = compatibilityValidator.runValidation()
+        stackedFastReject.isEligible = validationReport.moduleAEligible
+        blockAccountingFastPath.isEligible = validationReport.moduleBEligible
+
+        if (!validationReport.moduleBEligible) {
+            logger.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: ${validationReport.moduleBReason}")
+        }
+        if (validationReport.moduleAEligible) {
+            logger.info("[Optimizer] Module A (SSBStackedFastReject) is eligible.")
+        }
+
         if (validationReport.isOverallCompatible) {
             val targetMode = if (optimizerConfig.configuredMode == OperatingMode.ACTIVE) {
                 // If operator configured ACTIVE, attempt boot-time hook installation

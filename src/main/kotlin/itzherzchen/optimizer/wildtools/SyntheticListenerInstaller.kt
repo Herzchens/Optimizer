@@ -32,7 +32,9 @@ enum class UninstallResult {
 enum class PreflightResult {
     OK,
     FAILED_NOT_INSTALLED,
-    FAILED_LIST_DRIFT
+    FAILED_LIST_DRIFT,
+    FAILED_DEPENDENCY_DISABLED,
+    FAILED_INTEGRATION_REPLACED
 }
 
 /**
@@ -58,7 +60,8 @@ class SyntheticListenerInstaller(
     var isInstalled: Boolean = false
         private set
 
-    private var targetList: MutableList<RegisteredListener>? = null
+    var targetList: MutableList<RegisteredListener>? = null
+        private set
 
     var savedStackedOriginal: RegisteredListener? = null
         private set
@@ -267,12 +270,18 @@ class SyntheticListenerInstaller(
         val mIdx = monitorIndex
         val repS = replacementStacked ?: return PreflightResult.FAILED_LIST_DRIFT
         val repM = replacementMonitor ?: return PreflightResult.FAILED_LIST_DRIFT
+        val origS = savedStackedOriginal ?: return PreflightResult.FAILED_LIST_DRIFT
+        val origM = savedMonitorOriginal ?: return PreflightResult.FAILED_LIST_DRIFT
 
         if (sIdx !in list.indices || mIdx !in list.indices) {
             return PreflightResult.FAILED_LIST_DRIFT
         }
 
         if (list[sIdx] !== repS || list[mIdx] !== repM) {
+            return PreflightResult.FAILED_LIST_DRIFT
+        }
+
+        if (repS.listener !== origS.listener || repM.listener !== origM.listener) {
             return PreflightResult.FAILED_LIST_DRIFT
         }
 

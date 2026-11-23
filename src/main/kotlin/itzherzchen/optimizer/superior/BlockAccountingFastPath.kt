@@ -61,6 +61,9 @@ class BlockAccountingFastPath(
     }
 ) {
 
+    @Volatile
+    var isEligible: Boolean = true
+
     private val orthogonalFaces = arrayOf(
         BlockFace.NORTH,
         BlockFace.SOUTH,
@@ -82,13 +85,14 @@ class BlockAccountingFastPath(
             return
         }
 
-        // 2. Pre-condition checks: mode, config, circuit breaker, cancellation
+        // 2. Pre-condition checks: mode, config, circuit breaker, cancellation, module eligibility
         val currentMode = modeController.mode
         val isGlobalTripped = circuitBreaker.isTripped(ModuleType.GLOBAL)
         val isModuleTripped = circuitBreaker.isTripped(ModuleType.BLOCK_ACCOUNTING_FAST_PATH)
 
         if (currentMode != OperatingMode.ACTIVE ||
             !config.blockAccountingFastPathEnabled ||
+            !isEligible ||
             isGlobalTripped ||
             isModuleTripped ||
             event.isCancelled

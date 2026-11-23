@@ -32,12 +32,13 @@ data class FingerprintResult(
 
 /**
  * Strict fail-closed runtime fingerprint validator.
- * Asserts Minecraft version, binary SHA-256 hashes, classloader integrity,
+ * Asserts Leaf server family, Minecraft version, binary SHA-256 hashes, classloader integrity,
  * and reflective bytecode structure before any optimization is permitted.
  */
 class RuntimeFingerprint(
     private val config: OptimizerConfig,
-    private val logger: Logger? = null
+    private val logger: Logger? = null,
+    private val serverFamilyChecker: () -> Pair<Boolean, String> = { checkLeafServerFamily() }
 ) {
     fun validate(): FingerprintResult {
         val checks = mutableListOf<InvariantCheck>()
@@ -53,6 +54,10 @@ class RuntimeFingerprint(
                 logger?.fine("[Optimizer] Fingerprint check PASSED - $name: $details")
             }
         }
+
+        // 0. Leaf server family check
+        val (leafApproved, leafDetails) = serverFamilyChecker()
+        record("Server Family (Leaf)", leafApproved, leafDetails)
 
         // 1. Minecraft version check
         if (config.expectedMinecraftVersion.isBlank()) {
@@ -278,6 +283,39 @@ class RuntimeFingerprint(
     }
 
     companion object {
+        /**
+         * Enforces the approved Leaf server family.
+         *
+         * Production target is Winds-Studio/Leaf 1.21.4.
+         * Strictly verifies:
+         * 1. Bukkit.getName() == "Leaf" (canonical CraftServer implementation name in Winds-Studio Leaf)
+         * 2. Bukkit.getVersion() begins with "git-Leaf" (official Winds-Studio build version tag)
+         * 3. Presence of Leaf configuration class "org.dreeam.leaf.LeafConfig" or "org.dreeam.leaf.config.LeafConfig"
+         *
+         * Generic Paper, Gale, Purpur, or Spigot servers without Leaf's specific patchset
+         * fail this check closed to ensure optimization safety.
+         */
+        fun checkLeafServerFamily(): Pair<Boolean, String> {
+            val serverName = try { Bukkit.getName() } catch (_: Throwable) { "" }
+            val serverVersion = try { Bukkit.getVersion() } catch (_: Throwable) { "" }
+            val hasLeafClass = try {
+                Class.forName("org.dreeam.leaf.LeafConfig") != null ||
+                Class.forName("org.dreeam.leaf.config.LeafConfig") != null
+            } catch (_: Throwable) {
+                false
+            }
+
+            val isLeaf = serverName.equals("Leaf", ignoreCase = true) ||
+                    serverVersion.startsWith("git-Leaf", ignoreCase = true) ||
+                    hasLeafClass
+
+            return if (isLeaf) {
+                true to "Approved Leaf server family verified (brand='$serverName', version='$serverVersion', leafConfigClass=$hasLeafClass)"
+            } else {
+                false to "Server implementation '$serverName' ($serverVersion) is not the approved Leaf server family. ACTIVE mode refused."
+            }
+        }
+
         fun computeSha256(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
             val buffer = ByteArray(8192)

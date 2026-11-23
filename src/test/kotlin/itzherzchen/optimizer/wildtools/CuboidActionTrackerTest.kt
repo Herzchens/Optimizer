@@ -199,4 +199,66 @@ class CuboidActionTrackerTest {
         val stats = timing.getStats()
         assertEquals(0L, stats.count)
     }
+
+    @Test
+    fun `normal root action integrity check passes and pushes context`() {
+        tracker.integrityChecker = { true }
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+
+        tracker.onRootBlockBreakLowest(rootEvent)
+        assertTrue(stack.hasActiveContext(), "Root action must create active context when integrity check passes")
+        assertEquals(OperatingMode.OBSERVE, modeController.mode)
+        assertFalse(circuitBreaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
+    }
+
+    @Test
+    fun `WT list drift on root action triggers global disarm and aborts action context`() {
+        // Integrity check simulates WT list drift
+        tracker.integrityChecker = {
+            circuitBreaker.trip(
+                itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                "WildTools list drift detected"
+            )
+            false
+        }
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+
+        tracker.onRootBlockBreakLowest(rootEvent)
+
+        assertFalse(stack.hasActiveContext(), "Context must not be pushed on failed preflight")
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, modeController.mode)
+        assertTrue(circuitBreaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
+    }
+
+    @Test
+    fun `replacement listener triggers disarm and aborts action context`() {
+        tracker.integrityChecker = {
+            circuitBreaker.trip(
+                itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                "Replacement listener detected at wrapped slot"
+            )
+            false
+        }
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+
+        tracker.onRootBlockBreakLowest(rootEvent)
+
+        assertFalse(stack.hasActiveContext(), "No context should be created for failed integrity preflight")
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, modeController.mode)
+        assertTrue(circuitBreaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
+    }
+
+    @Test
+    fun `hooks absent and OBSERVE mode produces no unsafe behavior`() {
+        // In OBSERVE mode with no integrityChecker wired or hooks absent
+        tracker.integrityChecker = null
+        assertEquals(OperatingMode.OBSERVE, modeController.mode)
+
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+        tracker.onRootBlockBreakLowest(rootEvent)
+
+        assertTrue(stack.hasActiveContext(), "OBSERVE mode allows passive tracking without hooks")
+        assertEquals(OperatingMode.OBSERVE, modeController.mode)
+        assertFalse(circuitBreaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
+    }
 }

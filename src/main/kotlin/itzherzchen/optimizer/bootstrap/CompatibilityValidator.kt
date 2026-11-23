@@ -14,7 +14,15 @@ data class FullValidationReport(
     val listenerCensusResult: ListenerCensusResult,
     val riskScanResult: TransactionRiskReport,
     val isOverallCompatible: Boolean,
-    val recommendedMode: OperatingMode
+    val recommendedMode: OperatingMode,
+    val moduleAEligible: Boolean = isOverallCompatible,
+    val moduleAReason: String = if (isOverallCompatible) "SSBStackedFastReject verified safe" else "Runtime incompatible",
+    val moduleBEligible: Boolean = isOverallCompatible && !riskScanResult.hasHighRiskExternalListeners,
+    val moduleBReason: String = when {
+        !isOverallCompatible -> "Runtime incompatible"
+        riskScanResult.hasHighRiskExternalListeners -> "Refused due to transaction risk (${riskScanResult.riskSummary})"
+        else -> "BlockAccountingFastPath verified safe"
+    }
 )
 
 /**
@@ -25,14 +33,17 @@ class CompatibilityValidator(
     private val config: OptimizerConfig,
     private val modeController: ModeController,
     private val counters: Counters,
-    private val logger: Logger? = null
+    private val logger: Logger? = null,
+    private val fingerprintProvider: () -> FingerprintResult = { RuntimeFingerprint(config, logger).validate() },
+    private val censusProvider: () -> ListenerCensusResult = { ListenerCensus(logger).performCensus() },
+    private val riskScannerProvider: () -> TransactionRiskReport = { TransactionRiskScanner(logger).scan() }
 ) {
     fun runValidation(): FullValidationReport {
         logger?.info("[Optimizer] Running runtime validation suite...")
 
-        val fingerprint = RuntimeFingerprint(config, logger).validate()
-        val census = ListenerCensus(logger).performCensus()
-        val riskReport = TransactionRiskScanner(logger).scan()
+        val fingerprint = fingerprintProvider()
+        val census = censusProvider()
+        val riskReport = riskScannerProvider()
 
         if (!fingerprint.isCompatible) {
             counters.validationFailures.increment()
@@ -44,11 +55,24 @@ class CompatibilityValidator(
             logger?.severe("[Optimizer] Listener census failed: ${census.discrepancies.joinToString("; ")}")
         }
 
-        if (riskReport.hasHighRiskExternalListeners) {
-            logger?.warning("[Optimizer] High-risk external listeners detected on CuboidWandUseEvent: ${riskReport.externalListeners.joinToString(", ")}")
+        val compatible = fingerprint.isCompatible && census.isTopologyValid
+
+        val moduleAEligible = compatible
+        val moduleAReason = if (compatible) {
+            "SSBStackedFastReject verified safe"
+        } else {
+            "Runtime incompatible"
         }
 
-        val compatible = fingerprint.isCompatible && census.isTopologyValid
+        val moduleBEligible = compatible && !riskReport.hasHighRiskExternalListeners
+        val moduleBReason = when {
+            !compatible -> "Runtime incompatible"
+            riskReport.hasHighRiskExternalListeners -> {
+                logger?.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: transaction risk detected on CuboidWandUseEvent (${riskReport.riskSummary})")
+                "Refused due to transaction risk (${riskReport.riskSummary})"
+            }
+            else -> "BlockAccountingFastPath verified safe"
+        }
 
         val recommendedMode = when {
             !compatible -> OperatingMode.OBSERVE
@@ -61,7 +85,11 @@ class CompatibilityValidator(
             listenerCensusResult = census,
             riskScanResult = riskReport,
             isOverallCompatible = compatible,
-            recommendedMode = recommendedMode
+            recommendedMode = recommendedMode,
+            moduleAEligible = moduleAEligible,
+            moduleAReason = moduleAReason,
+            moduleBEligible = moduleBEligible,
+            moduleBReason = moduleBReason
         )
     }
 }

@@ -59,7 +59,8 @@ class CuboidActionTracker(
         } catch (_: Throwable) {
             false
         }
-    }
+    },
+    var integrityChecker: (() -> Boolean)? = null
 ) : Listener {
 
     private val actionIdSequence = AtomicLong(0)
@@ -83,6 +84,21 @@ class CuboidActionTracker(
         } ?: return
 
         val tool = cuboidToolResolver(item) ?: return
+
+        // Live identity preflight validation before every root Cuboid action
+        val checker = integrityChecker
+        if (checker != null) {
+            if (!checker()) {
+                logger?.severe("[Optimizer] Aborting root Cuboid action: live identity verification failed.")
+                return
+            }
+        } else if (modeController.mode == OperatingMode.ACTIVE) {
+            circuitBreaker.trip(
+                itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                "Root Cuboid action in ACTIVE mode without wired live identity validation. Disarming system."
+            )
+            return
+        }
 
         // Sample timing if enabled (zero System.nanoTime() calls for non-sampled actions)
         val startNanos = if (timing?.shouldSample() == true) System.nanoTime() else 0L

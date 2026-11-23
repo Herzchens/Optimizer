@@ -94,6 +94,19 @@ class OptimizerCommand(
             sender.sendMessage(Component.text("  - $module: ", NamedTextColor.GRAY)
                 .append(Component.text("$statusText$details", statusColor)))
         }
+
+        val report = try { validator.runValidation() } catch (_: Throwable) { null }
+        if (report != null) {
+            sender.sendMessage(Component.text("Module Eligibility:", NamedTextColor.GRAY))
+            val aColor = if (report.moduleAEligible) NamedTextColor.GREEN else NamedTextColor.RED
+            val aText = if (report.moduleAEligible) "ELIGIBLE" else "REFUSED"
+            sender.sendMessage(Component.text("  - Module A (SSBStackedFastReject): ", NamedTextColor.GRAY)
+                .append(Component.text(aText, aColor)))
+            val bColor = if (report.moduleBEligible) NamedTextColor.GREEN else NamedTextColor.RED
+            val bText = if (report.moduleBEligible) "ELIGIBLE" else "REFUSED (${report.moduleBReason})"
+            sender.sendMessage(Component.text("  - Module B (BlockAccountingFastPath): ", NamedTextColor.GRAY)
+                .append(Component.text(bText, bColor)))
+        }
     }
 
     private fun handleValidate(sender: CommandSender) {
@@ -130,6 +143,17 @@ class OptimizerCommand(
         } else {
             sender.sendMessage(Component.text("  [OK] No foreign listeners on CuboidWandUseEvent", NamedTextColor.GREEN))
         }
+
+        sender.sendMessage(Component.text("Module Eligibility:", NamedTextColor.YELLOW))
+        val modAColor = if (report.moduleAEligible) NamedTextColor.GREEN else NamedTextColor.RED
+        val modAText = if (report.moduleAEligible) "ELIGIBLE (${report.moduleAReason})" else "REFUSED (${report.moduleAReason})"
+        sender.sendMessage(Component.text("  - Module A (SSBStackedFastReject): ", NamedTextColor.GRAY)
+            .append(Component.text(modAText, modAColor)))
+
+        val modBColor = if (report.moduleBEligible) NamedTextColor.GREEN else NamedTextColor.RED
+        val modBText = if (report.moduleBEligible) "ELIGIBLE (${report.moduleBReason})" else "REFUSED (${report.moduleBReason})"
+        sender.sendMessage(Component.text("  - Module B (BlockAccountingFastPath): ", NamedTextColor.GRAY)
+            .append(Component.text(modBText, modBColor)))
 
         sender.sendMessage(Component.text("Recommended Mode: ", NamedTextColor.YELLOW)
             .append(Component.text(report.recommendedMode.name, NamedTextColor.AQUA)))

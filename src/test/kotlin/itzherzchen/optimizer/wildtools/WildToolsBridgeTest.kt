@@ -12,6 +12,7 @@ import org.bukkit.plugin.Plugin
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.Mockito.`when`
 import org.mockito.Mockito.mock
 
 class WildToolsBridgeTest {
@@ -117,5 +118,116 @@ class WildToolsBridgeTest {
         // Then trigger modeController disarm
         modeController.disarm("Test emergency", "TEST")
         assertFalse(bridge.isHooked)
+    }
+
+    @Test
+    fun `verifyIntegrity in ACTIVE mode without hooks trips global breaker and returns FAILED_NOT_INSTALLED`() {
+        modeController.transitionTo(OperatingMode.ACTIVE, "Test active setup")
+        val result = bridge.verifyIntegrity()
+        assertEquals(PreflightResult.FAILED_NOT_INSTALLED, result)
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, modeController.mode)
+        assertTrue(circuitBreaker.isTripped(ModuleType.GLOBAL))
+    }
+
+    @Test
+    fun `verifyIntegrity when dependency is disabled trips global breaker and returns FAILED_DEPENDENCY_DISABLED`() {
+        var dependencyEnabled = true
+        val rawList: MutableList<org.bukkit.plugin.RegisteredListener> = java.util.LinkedList()
+        val customBridge = WildToolsBridge(
+            plugin = mock(Plugin::class.java),
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            actionContextStack = stack,
+            actionTracker = tracker,
+            listenerInstaller = installer,
+            dependencyChecker = { dependencyEnabled },
+            listProvider = { rawList }
+        )
+
+        val ssbPlugin = mock(Plugin::class.java)
+        `when`(ssbPlugin.name).thenReturn("SuperiorSkyblock2")
+        val dummyL = object : org.bukkit.event.Listener {}
+        val dummyE = org.bukkit.plugin.EventExecutor { _, _ -> }
+        val origNorm = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.NORMAL, ssbPlugin, false)
+        val origStack = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.HIGHEST, ssbPlugin, false)
+        val origMon = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.MONITOR, ssbPlugin, false)
+        rawList.addAll(listOf(origNorm, origStack, origMon))
+
+        val validCensus = ListenerCensusResult(
+            isTopologyValid = true,
+            entries = emptyList(),
+            stackedBlocksIndex = 1,
+            blockChangesIndex = 2,
+            signsListenerIndex = 2,
+            protectionListenerIndex = 0,
+            discrepancies = emptyList()
+        )
+        installer.install(rawList, validCensus)
+        val hookedField = WildToolsBridge::class.java.getDeclaredField("isHooked")
+        hookedField.isAccessible = true
+        hookedField.set(customBridge, true)
+
+        // Intact preflight
+        assertEquals(PreflightResult.OK, customBridge.verifyIntegrity())
+
+        // Disable dependency
+        dependencyEnabled = false
+        val result = customBridge.verifyIntegrity()
+        assertEquals(PreflightResult.FAILED_DEPENDENCY_DISABLED, result)
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, modeController.mode)
+        assertTrue(circuitBreaker.isTripped(ModuleType.GLOBAL))
+    }
+
+    @Test
+    fun `verifyIntegrity when integration list is externally replaced trips global breaker`() {
+        val rawList: MutableList<org.bukkit.plugin.RegisteredListener> = java.util.LinkedList()
+        var currentLiveList: MutableList<org.bukkit.plugin.RegisteredListener>? = rawList
+        val customBridge = WildToolsBridge(
+            plugin = mock(Plugin::class.java),
+            config = config,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            actionContextStack = stack,
+            actionTracker = tracker,
+            listenerInstaller = installer,
+            dependencyChecker = { true },
+            listProvider = { currentLiveList }
+        )
+
+        val ssbPlugin = mock(Plugin::class.java)
+        `when`(ssbPlugin.name).thenReturn("SuperiorSkyblock2")
+        val dummyL = object : org.bukkit.event.Listener {}
+        val dummyE = org.bukkit.plugin.EventExecutor { _, _ -> }
+        val origNorm = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.NORMAL, ssbPlugin, false)
+        val origStack = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.HIGHEST, ssbPlugin, false)
+        val origMon = org.bukkit.plugin.RegisteredListener(dummyL, dummyE, org.bukkit.event.EventPriority.MONITOR, ssbPlugin, false)
+        rawList.addAll(listOf(origNorm, origStack, origMon))
+
+        val validCensus = ListenerCensusResult(
+            isTopologyValid = true,
+            entries = emptyList(),
+            stackedBlocksIndex = 1,
+            blockChangesIndex = 2,
+            signsListenerIndex = 2,
+            protectionListenerIndex = 0,
+            discrepancies = emptyList()
+        )
+        installer.install(rawList, validCensus)
+        val hookedField = WildToolsBridge::class.java.getDeclaredField("isHooked")
+        hookedField.isAccessible = true
+        hookedField.set(customBridge, true)
+
+        // Intact preflight
+        assertEquals(PreflightResult.OK, customBridge.verifyIntegrity())
+
+        // Simulate WildTools /tools reload giving a new list instance
+        currentLiveList = java.util.LinkedList(rawList)
+        val result = customBridge.verifyIntegrity()
+        assertEquals(PreflightResult.FAILED_INTEGRATION_REPLACED, result)
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, modeController.mode)
+        assertTrue(circuitBreaker.isTripped(ModuleType.GLOBAL))
     }
 }

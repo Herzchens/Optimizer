@@ -51,6 +51,9 @@ class StackedFastReject(
     }
 ) {
 
+    @Volatile
+    var isEligible: Boolean = true
+
     /**
      * Evaluates the synthetic BlockBreakEvent against the stacked blocks fast reject invariants.
      */
@@ -67,13 +70,14 @@ class StackedFastReject(
             return
         }
 
-        // 2. Pre-condition checks: mode, config, circuit breaker, cancellation, context
+        // 2. Pre-condition checks: mode, config, circuit breaker, cancellation, context, module eligibility
         val currentMode = modeController.mode
         val isGlobalTripped = circuitBreaker.isTripped(ModuleType.GLOBAL)
         val isModuleTripped = circuitBreaker.isTripped(ModuleType.STACKED_FAST_REJECT)
 
         if (currentMode != OperatingMode.ACTIVE ||
             !config.stackedFastRejectEnabled ||
+            !isEligible ||
             isGlobalTripped ||
             isModuleTripped ||
             event.isCancelled
