@@ -2,14 +2,12 @@ package itzherzchen.optimizer.bootstrap
 
 import itzherzchen.optimizer.config.OptimizerConfig
 import org.bukkit.Bukkit
-import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.plugin.Plugin
 import java.io.File
 import java.io.FileInputStream
 import java.lang.reflect.Field
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.logging.Level
 import java.util.logging.Logger
 
 enum class InvariantStatus {
@@ -32,13 +30,15 @@ data class FingerprintResult(
 
 /**
  * Strict fail-closed runtime fingerprint validator.
- * Asserts Leaf server family, Minecraft version, binary SHA-256 hashes, classloader integrity,
+ * Asserts Leaf server family, exact Minecraft version, binary SHA-256 hashes of original
+ * installed vendor artifacts (via OriginalArtifactResolver), classloader integrity,
  * and reflective bytecode structure before any optimization is permitted.
  */
 class RuntimeFingerprint(
     private val config: OptimizerConfig,
     private val logger: Logger? = null,
-    private val serverFamilyChecker: () -> Pair<Boolean, String> = { checkLeafServerFamily() }
+    private val serverFamilyChecker: () -> Pair<Boolean, String> = { checkLeafServerFamily() },
+    val artifactResolver: OriginalArtifactResolver = OriginalArtifactResolver(logger = logger)
 ) {
     fun validate(): FingerprintResult {
         val checks = mutableListOf<InvariantCheck>()
@@ -55,84 +55,125 @@ class RuntimeFingerprint(
             }
         }
 
-        // 0. Leaf server family check
-        val (leafApproved, leafDetails) = serverFamilyChecker()
-        record("Server Family (Leaf)", leafApproved, leafDetails)
+        try {
+            // 0. Safety pins code policy check
+            val wtPolicyMatches = config.expectedWildToolsSha256.equals(OptimizerConfig.COMPILED_APPROVED_WT_SHA256, ignoreCase = true)
+            val ssbPolicyMatches = config.expectedSuperiorSkyblockSha256.equals(OptimizerConfig.COMPILED_APPROVED_SSB_SHA256, ignoreCase = true)
+            val mcPolicyMatches = config.expectedMinecraftVersion == OptimizerConfig.COMPILED_APPROVED_MC_VERSION
+            val safetyPinsPass = wtPolicyMatches && ssbPolicyMatches && mcPolicyMatches
 
-        // 1. Minecraft version check
-        if (config.expectedMinecraftVersion.isBlank()) {
-            record("Minecraft Version", false, "Expected Minecraft version is blank in configuration")
-        } else {
-            val bukkitVersion = try { Bukkit.getBukkitVersion() } catch (_: Exception) { "" }
-            val serverVersion = try { Bukkit.getVersion() } catch (_: Exception) { "" }
-            val mcMatch = bukkitVersion.contains(config.expectedMinecraftVersion) ||
-                    serverVersion.contains(config.expectedMinecraftVersion)
-            record(
-                "Minecraft Version",
-                mcMatch,
-                "Expected '${config.expectedMinecraftVersion}', Bukkit version: '$bukkitVersion', Server: '$serverVersion'"
-            )
+            if (!safetyPinsPass) {
+                val violations = mutableListOf<String>()
+                if (!wtPolicyMatches) violations.add("WildTools expected SHA-256 ('${config.expectedWildToolsSha256}') does not match compiled approved policy ('${OptimizerConfig.COMPILED_APPROVED_WT_SHA256}')")
+                if (!ssbPolicyMatches) violations.add("SuperiorSkyblock2 expected SHA-256 ('${config.expectedSuperiorSkyblockSha256}') does not match compiled approved policy ('${OptimizerConfig.COMPILED_APPROVED_SSB_SHA256}')")
+                if (!mcPolicyMatches) violations.add("Minecraft expected version ('${config.expectedMinecraftVersion}') does not match compiled approved policy ('${OptimizerConfig.COMPILED_APPROVED_MC_VERSION}')")
+                record(
+                    "Safety Pins Code Policy",
+                    false,
+                    "Configured safety pins diverge from compiled code policy: ${violations.joinToString("; ")}. Operator overrides are forbidden; supporting new builds requires a reviewed code change."
+                )
+            } else {
+                record(
+                    "Safety Pins Code Policy",
+                    true,
+                    "Configured pins strictly adhere to compiled approved policy (WT=${OptimizerConfig.COMPILED_APPROVED_WT_SHA256}, SSB=${OptimizerConfig.COMPILED_APPROVED_SSB_SHA256}, MC=${OptimizerConfig.COMPILED_APPROVED_MC_VERSION})"
+                )
+            }
+
+            // 1. Leaf server family check
+            val (leafApproved, leafDetails) = serverFamilyChecker()
+            record("Server Family (Leaf)", leafApproved, leafDetails)
+
+            // 2. Exact Minecraft version check
+            if (config.expectedMinecraftVersion.isBlank()) {
+                record("Minecraft Version", false, "Expected Minecraft version is blank in configuration")
+            } else {
+                val exactVersion = try {
+                    Bukkit.getMinecraftVersion()
+                } catch (_: Throwable) {
+                    null
+                } ?: try {
+                    val bv = Bukkit.getBukkitVersion()
+                    if (bv.contains("-R")) bv.substringBefore("-R").trim() else bv.trim()
+                } catch (_: Throwable) {
+                    ""
+                }
+
+                val mcMatch = exactVersion == OptimizerConfig.COMPILED_APPROVED_MC_VERSION &&
+                        config.expectedMinecraftVersion == OptimizerConfig.COMPILED_APPROVED_MC_VERSION
+
+                record(
+                    "Minecraft Version",
+                    mcMatch,
+                    "Target version '${OptimizerConfig.COMPILED_APPROVED_MC_VERSION}', detected exact: '$exactVersion'"
+                )
+            }
+
+            // 3. WildTools plugin presence, classloader, and original artifact hash check
+            val wtPlugin = try { Bukkit.getPluginManager()?.getPlugin("WildTools") } catch (_: Exception) { null }
+            if (wtPlugin == null || !wtPlugin.isEnabled) {
+                record("WildTools Enabled", false, "WildTools plugin is not loaded or not enabled")
+            } else {
+                val wtVersion = try { wtPlugin.description.version } catch (_: Throwable) { "unknown" }
+                record("WildTools Enabled", true, "WildTools version $wtVersion is enabled")
+
+                // Check classloader
+                val wtLoader = wtPlugin.javaClass.classLoader
+                val isStandardLoader = wtLoader != null && wtLoader.javaClass.name.contains("PluginClassLoader")
+                record(
+                    "WildTools ClassLoader",
+                    isStandardLoader,
+                    "ClassLoader: ${wtLoader?.javaClass?.name ?: "null"}"
+                )
+
+                // WildTools original artifact SHA-256
+                validateJarHash(
+                    plugin = wtPlugin,
+                    expectedHash = OptimizerConfig.COMPILED_APPROVED_WT_SHA256,
+                    pluginName = "WildTools",
+                    record = ::record
+                )
+
+                // WildTools Reflective Structure
+                validateWildToolsStructure(wtPlugin, ::record)
+            }
+
+            // 4. SuperiorSkyblock2 plugin presence, classloader, and original artifact hash check
+            val ssbPlugin = try { Bukkit.getPluginManager()?.getPlugin("SuperiorSkyblock2") } catch (_: Exception) { null }
+            if (ssbPlugin == null || !ssbPlugin.isEnabled) {
+                record("SuperiorSkyblock2 Enabled", false, "SuperiorSkyblock2 plugin is not loaded or not enabled")
+            } else {
+                val ssbVersion = try { ssbPlugin.description.version } catch (_: Throwable) { "unknown" }
+                record("SuperiorSkyblock2 Enabled", true, "SuperiorSkyblock2 version $ssbVersion is enabled")
+
+                // Check classloader
+                val ssbLoader = ssbPlugin.javaClass.classLoader
+                val isStandardLoader = ssbLoader != null && ssbLoader.javaClass.name.contains("PluginClassLoader")
+                record(
+                    "SuperiorSkyblock2 ClassLoader",
+                    isStandardLoader,
+                    "ClassLoader: ${ssbLoader?.javaClass?.name ?: "null"}"
+                )
+
+                // SuperiorSkyblock2 original artifact SHA-256
+                validateJarHash(
+                    plugin = ssbPlugin,
+                    expectedHash = OptimizerConfig.COMPILED_APPROVED_SSB_SHA256,
+                    pluginName = "SuperiorSkyblock2",
+                    record = ::record
+                )
+
+                // SuperiorSkyblock2 Reflective Structure & EventsDispatcher check
+                validateSuperiorSkyblockStructure(ssbPlugin, ::record)
+            }
+
+            val allPassed = failures.isEmpty()
+            return FingerprintResult(allPassed, checks, failures)
+        } catch (t: Throwable) {
+            logger?.log(Level.SEVERE, "[Optimizer] Top-level error in RuntimeFingerprint validation", t)
+            record("Runtime Fingerprint Execution", false, "Top-level validation error: ${t.javaClass.name}: ${t.message}")
+            return FingerprintResult(false, checks, failures)
         }
-
-        // 2. WildTools plugin presence and classloader check
-        val wtPlugin = try { Bukkit.getPluginManager()?.getPlugin("WildTools") } catch (_: Exception) { null }
-        if (wtPlugin == null || !wtPlugin.isEnabled) {
-            record("WildTools Enabled", false, "WildTools plugin is not loaded or not enabled")
-        } else {
-            record("WildTools Enabled", true, "WildTools version ${wtPlugin.description.version} is enabled")
-
-            // Check classloader
-            val wtLoader = wtPlugin.javaClass.classLoader
-            val isStandardLoader = wtLoader != null && wtLoader.javaClass.name.contains("PluginClassLoader")
-            record(
-                "WildTools ClassLoader",
-                isStandardLoader,
-                "ClassLoader: ${wtLoader?.javaClass?.name ?: "null"}"
-            )
-
-            // WildTools JAR SHA-256
-            validateJarHash(
-                plugin = wtPlugin,
-                expectedHash = config.expectedWildToolsSha256,
-                pluginName = "WildTools",
-                record = ::record
-            )
-
-            // WildTools Reflective Structure
-            validateWildToolsStructure(wtPlugin, ::record)
-        }
-
-        // 3. SuperiorSkyblock2 plugin presence and classloader check
-        val ssbPlugin = try { Bukkit.getPluginManager()?.getPlugin("SuperiorSkyblock2") } catch (_: Exception) { null }
-
-        if (ssbPlugin == null || !ssbPlugin.isEnabled) {
-            record("SuperiorSkyblock2 Enabled", false, "SuperiorSkyblock2 plugin is not loaded or not enabled")
-        } else {
-            record("SuperiorSkyblock2 Enabled", true, "SuperiorSkyblock2 version ${ssbPlugin.description.version} is enabled")
-
-            // Check classloader
-            val ssbLoader = ssbPlugin.javaClass.classLoader
-            val isStandardLoader = ssbLoader != null && ssbLoader.javaClass.name.contains("PluginClassLoader")
-            record(
-                "SuperiorSkyblock2 ClassLoader",
-                isStandardLoader,
-                "ClassLoader: ${ssbLoader?.javaClass?.name ?: "null"}"
-            )
-
-            // SuperiorSkyblock2 JAR SHA-256
-            validateJarHash(
-                plugin = ssbPlugin,
-                expectedHash = config.expectedSuperiorSkyblockSha256,
-                pluginName = "SuperiorSkyblock2",
-                record = ::record
-            )
-
-            // SuperiorSkyblock2 Reflective Structure & EventsDispatcher check
-            validateSuperiorSkyblockStructure(ssbPlugin, ::record)
-        }
-
-        val allPassed = failures.isEmpty()
-        return FingerprintResult(allPassed, checks, failures)
     }
 
     private fun validateJarHash(
@@ -141,38 +182,23 @@ class RuntimeFingerprint(
         pluginName: String,
         record: (String, Boolean, String) -> Unit
     ) {
-        val codeSource = plugin.javaClass.protectionDomain?.codeSource
-        if (codeSource == null) {
-            record("$pluginName JAR Location", false, "ProtectionDomain codeSource is null")
-            return
-        }
-
-        val location = codeSource.location
-        val file: File = try {
-            File(location.toURI())
-        } catch (_: Exception) {
-            val decoded = URLDecoder.decode(location.path, StandardCharsets.UTF_8.name())
-            val isWindows = System.getProperty("os.name", "").lowercase().contains("win")
-            val cleanPath = if (isWindows && decoded.matches(Regex("^/[a-zA-Z]:/.*"))) {
-                decoded.substring(1)
-            } else {
-                decoded
+        val result = artifactResolver.resolve(plugin, expectedHash)
+        when (result) {
+            is ArtifactResolutionResult.Success -> {
+                record(
+                    "$pluginName Original Artifact SHA-256",
+                    true,
+                    "Verified original artifact '${result.file.name}' via ${result.resolutionMethod} (SHA-256: ${result.sha256})"
+                )
             }
-            File(cleanPath)
+            is ArtifactResolutionResult.Failure -> {
+                record(
+                    "$pluginName Original Artifact SHA-256",
+                    false,
+                    result.reason
+                )
+            }
         }
-
-        if (!file.exists() || !file.isFile || !file.canRead()) {
-            record("$pluginName JAR Readable", false, "Cannot read file at ${file.absolutePath}")
-            return
-        }
-
-        val computedHash = computeSha256(file)
-        val matches = computedHash.equals(expectedHash, ignoreCase = true)
-        record(
-            "$pluginName SHA-256 Hash",
-            matches,
-            "Computed: $computedHash, Expected: $expectedHash"
-        )
     }
 
     private fun validateWildToolsStructure(
@@ -199,14 +225,10 @@ class RuntimeFingerprint(
             record(
                 "WildTools claimingPluginsBreakMethods Type",
                 isList,
-                "Field found: ${field.type.name}, value is List: $isList"
+                "claimingPluginsBreakMethods is ${if (isList) "List (${list?.javaClass?.name})" else "not a List (${list?.javaClass?.name})"}"
             )
-
-            // Validate callBreakEvent signature
-            val breakMethod = eventsHandler.javaClass.getMethod("callBreakEvent", BlockBreakEvent::class.java, Boolean::class.javaPrimitiveType)
-            record("WildTools callBreakEvent Signature", true, "Method found: $breakMethod")
         } catch (e: Exception) {
-            record("WildTools Structure Reflection", false, "Exception during reflection: ${e.message}")
+            record("WildTools Structure Reflection", false, "Reflection failed: ${e.message}")
         }
     }
 
@@ -215,58 +237,54 @@ class RuntimeFingerprint(
         record: (String, Boolean, String) -> Unit
     ) {
         try {
-            // Check eventsDispatcher field is null
-            val dispatcherField = findField(plugin.javaClass, "eventsDispatcher")
-            if (dispatcherField == null) {
-                record("SSB eventsDispatcher Field", false, "Field not found on ${plugin.javaClass.name}")
-            } else {
-                dispatcherField.isAccessible = true
-                val dispatcherValue = dispatcherField.get(plugin)
-                record(
-                    "SSB eventsDispatcher Null Invariant",
-                    dispatcherValue == null,
-                    "Field value: $dispatcherValue (expected null)"
-                )
-            }
-
-            // Check getEventsDispatcher() method exists and returns null
-            try {
-                val getDispatcherMethod = plugin.javaClass.getMethod("getEventsDispatcher")
-                val dispatcherResult = getDispatcherMethod.invoke(plugin)
-                record(
-                    "SSB getEventsDispatcher() Null Invariant",
-                    dispatcherResult == null,
-                    "Method returned: $dispatcherResult (expected null)"
-                )
-            } catch (e: Exception) {
-                record("SSB getEventsDispatcher() Method", false, "Exception: ${e.message}")
-            }
-
-            // Check getGameEventsDispatcher() method
-            val gameDispatcherField = findField(plugin.javaClass, "gameEventsDispatcher")
+            val getStackedBlocksMethod = com.bgsoftware.superiorskyblock.api.SuperiorSkyblockAPI::class.java.getMethod("getStackedBlocks")
             record(
-                "SSB gameEventsDispatcher Field",
-                gameDispatcherField != null,
-                "Internal gameEventsDispatcher field present: ${gameDispatcherField != null}"
+                "SuperiorSkyblockAPI.getStackedBlocks",
+                getStackedBlocksMethod != null,
+                "SuperiorSkyblockAPI.getStackedBlocks() method verified"
             )
-
-            // Check getStackedBlocks() method
-            val stackedBlocksMethod = plugin.javaClass.getMethod("getStackedBlocks")
-            val stackedBlocks = stackedBlocksMethod.invoke(plugin)
-            record("SSB getStackedBlocks()", stackedBlocks != null, "Returned: ${stackedBlocks?.javaClass?.name}")
-
-            // Check getKeys() method
-            val keysMethod = plugin.javaClass.getMethod("getKeys")
-            val keys = keysMethod.invoke(plugin)
-            record("SSB getKeys()", keys != null, "Returned: ${keys?.javaClass?.name}")
-
-            // Check getGrid() method
-            val gridMethod = plugin.javaClass.getMethod("getGrid")
-            val grid = gridMethod.invoke(plugin)
-            record("SSB getGrid()", grid != null, "Returned: ${grid?.javaClass?.name}")
-
         } catch (e: Exception) {
-            record("SSB Structure Reflection", false, "Exception during reflection: ${e.message}")
+            record("SuperiorSkyblockAPI.getStackedBlocks", false, "Method missing: ${e.message}")
+        }
+
+        try {
+            val getGridMethod = com.bgsoftware.superiorskyblock.api.SuperiorSkyblockAPI::class.java.getMethod("getGrid")
+            record(
+                "SuperiorSkyblockAPI.getGrid",
+                getGridMethod != null,
+                "SuperiorSkyblockAPI.getGrid() method verified"
+            )
+        } catch (e: Exception) {
+            record("SuperiorSkyblockAPI.getGrid", false, "Method missing: ${e.message}")
+        }
+
+        // Verify SSB internal EventsDispatcher structure
+        try {
+            val eventsDispatcherField = findField(plugin.javaClass, "eventsDispatcher")
+            if (eventsDispatcherField != null) {
+                eventsDispatcherField.isAccessible = true
+                val dispatcher = eventsDispatcherField.get(plugin)
+                if (dispatcher != null) {
+                    val callbacksField = findField(dispatcher.javaClass, "callbacks")
+                    if (callbacksField != null) {
+                        callbacksField.isAccessible = true
+                        val callbacks = callbacksField.get(dispatcher)
+                        record(
+                            "SSB EventsDispatcher",
+                            callbacks is Map<*, *>,
+                            "Verified EventsDispatcher callbacks map (${callbacks?.javaClass?.name})"
+                        )
+                    } else {
+                        record("SSB EventsDispatcher", false, "Field 'callbacks' not found on ${dispatcher.javaClass.name}")
+                    }
+                } else {
+                    record("SSB EventsDispatcher", false, "eventsDispatcher field returned null")
+                }
+            } else {
+                record("SSB EventsDispatcher", false, "Field 'eventsDispatcher' not found on ${plugin.javaClass.name}")
+            }
+        } catch (e: Exception) {
+            record("SSB EventsDispatcher Reflection", false, "EventsDispatcher reflection failed: ${e.message}")
         }
     }
 
@@ -298,16 +316,24 @@ class RuntimeFingerprint(
         fun checkLeafServerFamily(): Pair<Boolean, String> {
             val serverName = try { Bukkit.getName() } catch (_: Throwable) { "" }
             val serverVersion = try { Bukkit.getVersion() } catch (_: Throwable) { "" }
-            val hasLeafClass = try {
-                Class.forName("org.dreeam.leaf.LeafConfig") != null ||
+
+            val isExactLeafName = serverName.equals("Leaf", ignoreCase = true)
+            val isExactLeafVersion = serverVersion.startsWith("git-Leaf-", ignoreCase = true) ||
+                    serverVersion.startsWith("git-Leaf ", ignoreCase = true)
+
+            val hasLeafConfigClass = try {
+                Class.forName("org.dreeam.leaf.LeafConfig") != null
+            } catch (_: Throwable) {
+                false
+            }
+            val hasAltLeafConfigClass = try {
                 Class.forName("org.dreeam.leaf.config.LeafConfig") != null
             } catch (_: Throwable) {
                 false
             }
+            val hasLeafClass = hasLeafConfigClass || hasAltLeafConfigClass
 
-            val isLeaf = serverName.equals("Leaf", ignoreCase = true) ||
-                    serverVersion.startsWith("git-Leaf", ignoreCase = true) ||
-                    hasLeafClass
+            val isLeaf = (isExactLeafName || isExactLeafVersion) && (hasLeafClass || isExactLeafVersion)
 
             return if (isLeaf) {
                 true to "Approved Leaf server family verified (brand='$serverName', version='$serverVersion', leafConfigClass=$hasLeafClass)"
