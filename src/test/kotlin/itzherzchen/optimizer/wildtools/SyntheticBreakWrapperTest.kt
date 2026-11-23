@@ -208,9 +208,10 @@ class SyntheticBreakWrapperTest {
     }
 
     @Test
-    fun `when original throws exception, wrapper does NOT retry original and propagates EventException`() {
+    fun `when original throws RuntimeException, wrapper preserves exact exception without wrapping and without retry`() {
         val (origRL, mockExecutor) = createRegisteredListener("SuperiorSkyblock2", EventPriority.HIGHEST)
-        `when`(mockExecutor.execute(any(), any())).thenThrow(RuntimeException("SSB downstream failure"))
+        val expectedEx = RuntimeException("SSB downstream runtime failure")
+        `when`(mockExecutor.execute(any(), any())).thenThrow(expectedEx)
 
         val wrapper = SyntheticBreakWrapper(
             original = origRL,
@@ -226,12 +227,68 @@ class SyntheticBreakWrapperTest {
         val synthBlock = mock(Block::class.java)
         val synthEvent = BlockBreakEvent(synthBlock, player)
 
-        // Must throw EventException without calling mockExecutor twice
-        assertThrows(org.bukkit.event.EventException::class.java) {
+        val thrown = assertThrows(RuntimeException::class.java) {
             wrapper.execute(origRL.listener, synthEvent)
         }
+        assertSame(expectedEx, thrown)
 
         // Critical safety invariant: Never invoke original more than once per event!
+        verify(mockExecutor, times(1)).execute(origRL.listener, synthEvent)
+    }
+
+    @Test
+    fun `when original throws EventException, wrapper preserves exact exception without retry`() {
+        val (origRL, mockExecutor) = createRegisteredListener("SuperiorSkyblock2", EventPriority.HIGHEST)
+        val expectedEx = org.bukkit.event.EventException(IllegalStateException("Root cause"))
+        `when`(mockExecutor.execute(any(), any())).thenThrow(expectedEx)
+
+        val wrapper = SyntheticBreakWrapper(
+            original = origRL,
+            type = SyntheticCallbackType.STACKED_BLOCKS,
+            actionContextStack = stack,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            primaryThreadChecker = { isPrimaryThread }
+        )
+
+        val player = mock(Player::class.java)
+        val synthBlock = mock(Block::class.java)
+        val synthEvent = BlockBreakEvent(synthBlock, player)
+
+        val thrown = assertThrows(org.bukkit.event.EventException::class.java) {
+            wrapper.execute(origRL.listener, synthEvent)
+        }
+        assertSame(expectedEx, thrown)
+
+        verify(mockExecutor, times(1)).execute(origRL.listener, synthEvent)
+    }
+
+    @Test
+    fun `when original throws Error, wrapper preserves exact Error without retry`() {
+        val (origRL, mockExecutor) = createRegisteredListener("SuperiorSkyblock2", EventPriority.HIGHEST)
+        val expectedError = AssertionError("Assertion error in SSB listener")
+        `when`(mockExecutor.execute(any(), any())).thenThrow(expectedError)
+
+        val wrapper = SyntheticBreakWrapper(
+            original = origRL,
+            type = SyntheticCallbackType.STACKED_BLOCKS,
+            actionContextStack = stack,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            primaryThreadChecker = { isPrimaryThread }
+        )
+
+        val player = mock(Player::class.java)
+        val synthBlock = mock(Block::class.java)
+        val synthEvent = BlockBreakEvent(synthBlock, player)
+
+        val thrown = assertThrows(AssertionError::class.java) {
+            wrapper.execute(origRL.listener, synthEvent)
+        }
+        assertSame(expectedError, thrown)
+
         verify(mockExecutor, times(1)).execute(origRL.listener, synthEvent)
     }
 

@@ -43,6 +43,13 @@ class WildToolsBridge(
         } catch (_: Throwable) {
             null
         }
+    },
+    private val primaryThreadChecker: () -> Boolean = {
+        try {
+            Bukkit.isPrimaryThread()
+        } catch (_: Throwable) {
+            true
+        }
     }
 ) {
     var isHooked: Boolean = false
@@ -113,7 +120,18 @@ class WildToolsBridge(
             return false
         }
 
-        val result = listenerInstaller.install(rawList, censusResult)
+        val token = censusResult.token
+        val result = if (token != null) {
+            // Eliminate census -> install TOCTOU: audited list instance MUST equal live list instance
+            if (rawList !== token.targetList) {
+                logger?.severe("[Optimizer] TOCTOU detected: WildTools claimingPluginsBreakMethods list instance changed between census and install!")
+                return false
+            }
+            listenerInstaller.install(token)
+        } else {
+            listenerInstaller.install(rawList, censusResult)
+        }
+
         if (result == InstallResult.SUCCESS) {
             isHooked = true
             captureDependencies()
@@ -129,11 +147,27 @@ class WildToolsBridge(
      * Reversible emergency disarm and safe uninstallation of private-list hooks.
      */
     fun disarm(reason: String = "Manual disarm") {
-        if (!isHooked) return
+        if (!isHooked && !listenerInstaller.isInstalled) return
 
         logger?.warning("[Optimizer] Disarming WildToolsBridge: $reason")
+
+        // Step 1: Thread-safe emergency disarm (valid from ANY thread)
+        listenerInstaller.emergencyDisarm()
+        listenerInstaller.stackedFastReject?.isEligible = false
+        listenerInstaller.blockAccountingFastPath?.isEligible = false
+
+        // Step 2: Thread check - NEVER mutate private list off-thread
+        if (!primaryThreadChecker()) {
+            logger?.severe(
+                "[Optimizer] WildToolsBridge disarm called off-main-thread on '${Thread.currentThread().name}'. " +
+                "Wrappers forced to passthrough. Physical list restoration rejected off-thread; server restart required."
+            )
+            isHooked = false
+            return
+        }
+
         val uninstallResult = listenerInstaller.uninstall()
-        isHooked = false
+        isHooked = (uninstallResult == UninstallResult.RESIDUAL_PASSTHROUGH_REMAINS)
         logger?.info("[Optimizer] WildTools hooks uninstalled: $uninstallResult")
     }
 

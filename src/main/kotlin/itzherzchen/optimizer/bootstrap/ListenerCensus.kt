@@ -1,5 +1,6 @@
 package itzherzchen.optimizer.bootstrap
 
+import itzherzchen.optimizer.wildtools.InstallationToken
 import org.bukkit.Bukkit
 import org.bukkit.event.EventPriority
 import org.bukkit.plugin.Plugin
@@ -22,7 +23,8 @@ data class ListenerCensusResult(
     val blockChangesIndex: Int,
     val signsListenerIndex: Int,
     val protectionListenerIndex: Int,
-    val discrepancies: List<String>
+    val discrepancies: List<String>,
+    val token: InstallationToken? = null
 )
 
 /**
@@ -75,14 +77,14 @@ class ListenerCensus(
             )
         }
 
-        return auditListenerList(rawList)
+        return auditListenerList(rawList, wtPlugin)
     }
 
     /**
      * Audits an arbitrary list of listeners against the expected SSB topology.
      * Accessible for isolated testing without live Bukkit plugin manager.
      */
-    fun auditListenerList(rawList: List<*>): ListenerCensusResult {
+    fun auditListenerList(rawList: List<*>, wtPlugin: Plugin? = null): ListenerCensusResult {
         val entries = mutableListOf<ListenerCensusEntry>()
         val discrepancies = mutableListOf<String>()
 
@@ -185,6 +187,26 @@ class ListenerCensus(
             )
         }
 
+        val token = if (isValid && rawList is MutableList<*> && rawList.all { it is RegisteredListener }) {
+            @Suppress("UNCHECKED_CAST")
+            val typedList = rawList as MutableList<RegisteredListener>
+            val sListener = typedList[stackedBlocksIdx]
+            val mListener = typedList[monitorIdx]
+            InstallationToken(
+                targetList = typedList,
+                stackedBlocksIndex = stackedBlocksIdx,
+                expectedStackedListener = sListener,
+                monitorIndex = monitorIdx,
+                expectedMonitorListener = mListener,
+                ssbPlugin = sListener.plugin,
+                ssbClassLoader = sListener.plugin.javaClass.classLoader,
+                wtPlugin = wtPlugin,
+                wtClassLoader = wtPlugin?.javaClass?.classLoader
+            )
+        } else {
+            null
+        }
+
         return ListenerCensusResult(
             isTopologyValid = isValid,
             entries = entries,
@@ -192,7 +214,8 @@ class ListenerCensus(
             blockChangesIndex = monitorIdx,
             signsListenerIndex = monitorIdx,
             protectionListenerIndex = protectionListenerIdx,
-            discrepancies = discrepancies
+            discrepancies = discrepancies,
+            token = token
         )
     }
 

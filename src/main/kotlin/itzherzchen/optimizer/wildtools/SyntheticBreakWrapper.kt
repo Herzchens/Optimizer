@@ -132,13 +132,6 @@ class SyntheticBreakWrapper(
     }
 
     private fun callOriginal(event: Event) {
-        try {
-            original.callEvent(event)
-        } catch (e: EventException) {
-            throw e
-        } catch (t: Throwable) {
-            throw EventException(t)
-        }
+        original.callEvent(event)
     }
 }
-

@@ -255,12 +255,6 @@ class BlockAccountingFastPath(
     }
 
     private fun callOriginal(original: RegisteredListener, event: BlockBreakEvent) {
-        try {
-            original.callEvent(event)
-        } catch (e: EventException) {
-            throw e
-        } catch (t: Throwable) {
-            throw EventException(t)
-        }
+        original.callEvent(event)
     }
 }
