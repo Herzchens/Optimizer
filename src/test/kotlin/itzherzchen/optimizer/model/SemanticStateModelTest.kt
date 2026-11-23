@@ -264,7 +264,7 @@ class SemanticStateModelTest {
         }
 
         val counters = Counters()
-        val stack = ActionContextStack(circuitBreaker, counters)
+        val stack = ActionContextStack(circuitBreaker, counters, primaryThreadChecker = { true })
 
         // Setup block and event
         val block = mock(Block::class.java)
@@ -381,6 +381,7 @@ class SemanticStateModelTest {
             circuitBreaker = circuitBreaker,
             actionContextStack = stack,
             counters = counters,
+            primaryThreadChecker = { true },
             stackedAmountProvider = { stk.amount }
         )
 
@@ -391,6 +392,7 @@ class SemanticStateModelTest {
             actionContextStack = stack,
             counters = counters,
             classifier = classifier,
+            primaryThreadChecker = { true },
             islandProvider = { activeIsland },
             signChecker = { mat -> mat.name.contains("SIGN") }
         )

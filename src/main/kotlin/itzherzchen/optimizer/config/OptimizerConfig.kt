@@ -7,13 +7,13 @@ import org.bukkit.configuration.file.FileConfiguration
  * Validated configuration for Optimizer plugin.
  */
 data class OptimizerConfig(
-    val configuredMode: OperatingMode,
-    val stackedFastRejectEnabled: Boolean,
-    val blockAccountingFastPathEnabled: Boolean,
-    val expectedWildToolsSha256: String,
-    val expectedSuperiorSkyblockSha256: String,
-    val expectedMinecraftVersion: String,
-    val timingSampleRate: Int
+    val configuredMode: OperatingMode = OperatingMode.OBSERVE,
+    val stackedFastRejectEnabled: Boolean = false,
+    val blockAccountingFastPathEnabled: Boolean = false,
+    val expectedWildToolsSha256: String = DEFAULT_WT_SHA256,
+    val expectedSuperiorSkyblockSha256: String = DEFAULT_SSB_SHA256,
+    val expectedMinecraftVersion: String = DEFAULT_MC_VERSION,
+    val timingSampleRate: Int = DEFAULT_TIMING_SAMPLE_RATE
 ) {
     companion object {
         const val DEFAULT_WT_SHA256 = "dd9ca6393ab5824a4e00def7846697770e4bb546dbf79e8d15957acd968c829e"

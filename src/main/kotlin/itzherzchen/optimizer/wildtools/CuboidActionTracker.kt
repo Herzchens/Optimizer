@@ -43,7 +43,7 @@ class CuboidActionTracker(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            false
         }
     },
     private val cuboidToolResolver: (ItemStack) -> CuboidTool? = { item ->
@@ -53,11 +53,11 @@ class CuboidActionTracker(
             null
         }
     },
-    private val toolBreaksTrackerCheck: (Player) -> Boolean = { player ->
+    private val toolBreaksTrackerCheck: (Player) -> Boolean? = { player ->
         try {
             ToolBreaksTracker.containsPlayer(player)
         } catch (_: Throwable) {
-            false
+            null
         }
     },
     var integrityChecker: (() -> Boolean)? = null
@@ -67,14 +67,38 @@ class CuboidActionTracker(
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
     fun onRootBlockBreakLowest(event: BlockBreakEvent) {
-        if (!primaryThreadChecker()) return
+        if (!primaryThreadChecker()) {
+            if (modeController.mode == OperatingMode.ACTIVE) {
+                counters.circuitTrips.increment()
+                logger?.severe(
+                    "[Optimizer] Off-main-thread root Cuboid action in ACTIVE mode on thread '${Thread.currentThread().name}'! Tripping circuit breaker and disarming."
+                )
+                circuitBreaker.trip(
+                    itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                    "Off-main-thread root Cuboid action on thread '${Thread.currentThread().name}'"
+                )
+            }
+            return
+        }
 
         if (modeController.mode == OperatingMode.DISARMED_RESTART_REQUIRED) return
 
         val player = event.player
 
-        // If player is already tracked by WildTools as breaking blocks, this is a synthetic event on the bus
-        if (toolBreaksTrackerCheck(player)) return
+        // Query whether player is currently in WildTools synthetic breaking state
+        val inToolBreak = toolBreaksTrackerCheck(player)
+        if (inToolBreak == true) {
+            // Player is actively executing a synthetic tool break: ignore synthetic event on global bus
+            return
+        }
+        if (inToolBreak == null) {
+            // Failure to query tool break state: unknown root/synthetic identity. Fail closed!
+            if (modeController.mode == OperatingMode.ACTIVE) {
+                counters.validationFailures.increment()
+                logger?.warning("[Optimizer] Failed to query ToolBreaksTracker for player '${player.name}'; aborting optimization.")
+            }
+            return
+        }
 
         // Check if player holds a CuboidTool in main hand
         val item = try {
@@ -84,6 +108,9 @@ class CuboidActionTracker(
         } ?: return
 
         val tool = cuboidToolResolver(item) ?: return
+
+        // Record observable candidate metric
+        counters.cuboidRootCandidates.increment()
 
         // Live identity preflight validation before every root Cuboid action
         val checker = integrityChecker
@@ -115,10 +142,24 @@ class CuboidActionTracker(
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
     fun onRootBlockBreakMonitor(event: BlockBreakEvent) {
-        if (!primaryThreadChecker()) return
+        if (!primaryThreadChecker()) {
+            if (modeController.mode == OperatingMode.ACTIVE) {
+                counters.circuitTrips.increment()
+                logger?.severe(
+                    "[Optimizer] Off-main-thread MONITOR root Cuboid action in ACTIVE mode on thread '${Thread.currentThread().name}'! Tripping circuit breaker and disarming."
+                )
+                circuitBreaker.trip(
+                    itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                    "Off-main-thread MONITOR root Cuboid action on thread '${Thread.currentThread().name}'"
+                )
+            }
+            actionContextStack.clear()
+            return
+        }
 
         val current = actionContextStack.current()
         if (current != null && current.rootEvent === event) {
+            counters.cuboidRootCompleted.increment()
             val confirmed = current.syntheticBreaksCount > 0 || current.isConfirmed
             // If the action produced synthetic breaks or was confirmed, increment verified cuboidActions counter
             if (confirmed) {

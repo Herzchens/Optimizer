@@ -261,4 +261,56 @@ class CuboidActionTrackerTest {
         assertEquals(OperatingMode.OBSERVE, modeController.mode)
         assertFalse(circuitBreaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
     }
+
+    @Test
+    fun `off thread root action in ACTIVE mode trips global circuit breaker and disarms`() {
+        val activeController = ModeController(OperatingMode.ACTIVE)
+        val breaker = CircuitBreaker(activeController)
+        val activeTracker = CuboidActionTracker(
+            actionContextStack = stack,
+            modeController = activeController,
+            circuitBreaker = breaker,
+            counters = counters,
+            primaryThreadChecker = { false }, // off thread!
+            cuboidToolResolver = { cuboidToolMock }
+        )
+
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+        activeTracker.onRootBlockBreakLowest(rootEvent)
+
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, activeController.mode)
+        assertTrue(breaker.isTripped(itzherzchen.optimizer.runtime.ModuleType.GLOBAL))
+        assertEquals(1L, counters.circuitTrips.sum())
+    }
+
+    @Test
+    fun `ToolBreaksTracker failure fails closed and aborts optimization`() {
+        val failingTracker = CuboidActionTracker(
+            actionContextStack = stack,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            cuboidToolResolver = { cuboidToolMock },
+            toolBreaksTrackerCheck = { null } // Simulates reflection/runtime error querying tracker
+        )
+
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+        failingTracker.onRootBlockBreakLowest(rootEvent)
+
+        assertFalse(stack.hasActiveContext(), "Context must not be pushed when ToolBreaksTracker state is unknown")
+    }
+
+    @Test
+    fun `root candidates and completed counters increment in OBSERVE mode`() {
+        val (_, rootEvent) = createPlayerWithTool("DIAMOND_PICKAXE")
+
+        assertEquals(0L, counters.cuboidRootCandidates.sum())
+        assertEquals(0L, counters.cuboidRootCompleted.sum())
+
+        tracker.onRootBlockBreakLowest(rootEvent)
+        assertEquals(1L, counters.cuboidRootCandidates.sum())
+
+        tracker.onRootBlockBreakMonitor(rootEvent)
+        assertEquals(1L, counters.cuboidRootCompleted.sum())
+    }
 }

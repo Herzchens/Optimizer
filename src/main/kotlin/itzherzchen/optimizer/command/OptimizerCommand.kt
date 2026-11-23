@@ -95,9 +95,9 @@ class OptimizerCommand(
                 .append(Component.text("$statusText$details", statusColor)))
         }
 
-        val report = try { validator.runValidation() } catch (_: Throwable) { null }
+        val report = validator.lastReport
         if (report != null) {
-            sender.sendMessage(Component.text("Module Eligibility:", NamedTextColor.GRAY))
+            sender.sendMessage(Component.text("Module Eligibility (Cached):", NamedTextColor.GRAY))
             val aColor = if (report.moduleAEligible) NamedTextColor.GREEN else NamedTextColor.RED
             val aText = if (report.moduleAEligible) "ELIGIBLE" else "REFUSED"
             sender.sendMessage(Component.text("  - Module A (SSBStackedFastReject): ", NamedTextColor.GRAY)

@@ -112,7 +112,7 @@ class SeededActionPropertyTest {
         val modeController = ModeController(OperatingMode.ACTIVE)
         val circuitBreaker = CircuitBreaker(modeController)
         val counters = Counters()
-        val stack = ActionContextStack(circuitBreaker, counters)
+        val stack = ActionContextStack(circuitBreaker, counters, primaryThreadChecker = { true })
 
         val optimizedCounts = mutableMapOf<String, Long>()
         val optimizedDirtyChunks = mutableSetOf<Long>()
@@ -139,6 +139,7 @@ class SeededActionPropertyTest {
             circuitBreaker = circuitBreaker,
             actionContextStack = stack,
             counters = counters,
+            primaryThreadChecker = { true },
             stackedAmountProvider = { currentStackedAmount }
         )
 
@@ -149,6 +150,7 @@ class SeededActionPropertyTest {
             actionContextStack = stack,
             counters = counters,
             classifier = classifier,
+            primaryThreadChecker = { true },
             islandProvider = { loc -> if (loc.y < 0.0) null else island },
             signChecker = { mat -> mat.name.contains("SIGN") }
         )

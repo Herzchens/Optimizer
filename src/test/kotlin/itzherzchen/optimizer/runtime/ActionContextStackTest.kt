@@ -22,7 +22,7 @@ class ActionContextStackTest {
         modeController = ModeController(OperatingMode.OBSERVE)
         circuitBreaker = CircuitBreaker(modeController)
         counters = Counters()
-        stack = ActionContextStack(circuitBreaker, counters)
+        stack = ActionContextStack(circuitBreaker, counters, primaryThreadChecker = { true })
     }
 
     private fun createMockContext(actionId: Long): Pair<ActionContext, BlockBreakEvent> {

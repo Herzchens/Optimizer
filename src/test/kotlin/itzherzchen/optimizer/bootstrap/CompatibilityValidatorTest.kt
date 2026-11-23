@@ -153,4 +153,29 @@ class CompatibilityValidatorTest {
         moduleB.isEligible = restartReport.moduleBEligible
         assertTrue(moduleB.isEligible)
     }
+
+    @Test
+    fun `scan failure marks Module A eligible but Module B refused due to scan failure`() {
+        val validator = CompatibilityValidator(
+            config = config,
+            modeController = modeController,
+            counters = counters,
+            fingerprintProvider = { FingerprintResult(true, emptyList(), emptyList()) },
+            censusProvider = { createValidCensus() },
+            riskScannerProvider = {
+                TransactionRiskReport(
+                    state = itzherzchen.optimizer.observe.TransactionRiskState.SCAN_FAILED,
+                    externalListeners = emptyList(),
+                    riskSummary = "Scan failed due to missing CuboidWandUseEvent class"
+                )
+            }
+        )
+
+        val report = validator.runValidation()
+
+        assertTrue(report.isOverallCompatible, "Fingerprint + census are intact")
+        assertTrue(report.moduleAEligible, "Module A must remain independently eligible")
+        assertFalse(report.moduleBEligible, "Module B must be refused when transaction risk scan fails (unknown is not clean)")
+        assertTrue(report.moduleBReason.contains("Refused due to transaction risk scan failure"))
+    }
 }

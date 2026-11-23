@@ -160,41 +160,27 @@ class OptimizerPlugin : JavaPlugin() {
             logger.severe("[Optimizer] Failed to find registered command 'optimizer' in plugin.yml!")
         }
 
-        // 6. Initial Boot Validation & Safe Hook Installation
-        val validationReport = compatibilityValidator.runValidation()
-        stackedFastReject.isEligible = validationReport.moduleAEligible
-        blockAccountingFastPath.isEligible = validationReport.moduleBEligible
+        // 6. Register Lifecycle Listener
+        // Final validation, transaction risk census, dependency capture, and ACTIVE arming
+        // are strictly deferred until ServerLoadEvent.STARTUP to prevent incomplete startup race conditions.
+        val lifecycleListener = itzherzchen.optimizer.runtime.OptimizerLifecycleListener(
+            optimizerConfig = optimizerConfig,
+            modeController = modeController,
+            compatibilityValidator = compatibilityValidator,
+            wildToolsBridge = wildToolsBridge,
+            stackedFastReject = stackedFastReject,
+            blockAccountingFastPath = blockAccountingFastPath,
+            logger = logger
+        )
+        server.pluginManager.registerEvents(lifecycleListener, this)
 
-        if (!validationReport.moduleBEligible) {
-            logger.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: ${validationReport.moduleBReason}")
-        }
-        if (validationReport.moduleAEligible) {
-            logger.info("[Optimizer] Module A (SSBStackedFastReject) is eligible.")
-        }
-
-        if (validationReport.isOverallCompatible) {
-            val targetMode = if (optimizerConfig.configuredMode == OperatingMode.ACTIVE) {
-                // If operator configured ACTIVE, attempt boot-time hook installation
-                val hooked = wildToolsBridge.installHooks(validationReport.listenerCensusResult)
-                if (hooked) {
-                    OperatingMode.ACTIVE
-                } else {
-                    logger.warning("[Optimizer] WildTools hook installation failed. Falling back to VALIDATED mode.")
-                    OperatingMode.VALIDATED
-                }
-            } else {
-                validationReport.recommendedMode
-            }
-            modeController.transitionTo(targetMode, "Initial boot validation passed")
-        } else {
-            logger.warning("[Optimizer] Initial validation found incompatibilities. Remaining in fail-closed OBSERVE mode.")
-        }
-
-        // Lock out hot arming after boot
-        modeController.markBootComplete()
+        // 7. Initial Read-Only Observer Diagnostics
+        val initialReport = compatibilityValidator.runValidation()
+        stackedFastReject.isEligible = initialReport.moduleAEligible
+        blockAccountingFastPath.isEligible = initialReport.moduleBEligible
 
         val elapsed = System.currentTimeMillis() - startTime
-        logger.info("[Optimizer] Optimizer enabled in mode ${modeController.mode} (${elapsed}ms).")
+        logger.info("[Optimizer] Safe OBSERVE infrastructure initialized (${elapsed}ms). Awaiting ServerLoadEvent.STARTUP for final validation.")
     }
 
     override fun onDisable() {

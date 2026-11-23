@@ -122,6 +122,7 @@ class WildToolsBridgeTest {
 
     @Test
     fun `verifyIntegrity in ACTIVE mode without hooks trips global breaker and returns FAILED_NOT_INSTALLED`() {
+        modeController.transitionTo(OperatingMode.VALIDATED, "Test validated setup")
         modeController.transitionTo(OperatingMode.ACTIVE, "Test active setup")
         val result = bridge.verifyIntegrity()
         assertEquals(PreflightResult.FAILED_NOT_INSTALLED, result)

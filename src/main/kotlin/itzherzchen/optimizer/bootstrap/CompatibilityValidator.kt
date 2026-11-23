@@ -4,7 +4,7 @@ import itzherzchen.optimizer.config.OptimizerConfig
 import itzherzchen.optimizer.observe.Counters
 import itzherzchen.optimizer.observe.TransactionRiskReport
 import itzherzchen.optimizer.observe.TransactionRiskScanner
-
+import itzherzchen.optimizer.observe.TransactionRiskState
 import itzherzchen.optimizer.runtime.ModeController
 import itzherzchen.optimizer.runtime.OperatingMode
 import java.util.logging.Logger
@@ -17,10 +17,11 @@ data class FullValidationReport(
     val recommendedMode: OperatingMode,
     val moduleAEligible: Boolean = isOverallCompatible,
     val moduleAReason: String = if (isOverallCompatible) "SSBStackedFastReject verified safe" else "Runtime incompatible",
-    val moduleBEligible: Boolean = isOverallCompatible && !riskScanResult.hasHighRiskExternalListeners,
+    val moduleBEligible: Boolean = isOverallCompatible && riskScanResult.state == TransactionRiskState.CLEAN,
     val moduleBReason: String = when {
         !isOverallCompatible -> "Runtime incompatible"
-        riskScanResult.hasHighRiskExternalListeners -> "Refused due to transaction risk (${riskScanResult.riskSummary})"
+        riskScanResult.state == TransactionRiskState.RISK_FOUND -> "Refused due to transaction risk (${riskScanResult.riskSummary})"
+        riskScanResult.state == TransactionRiskState.SCAN_FAILED -> "Refused due to transaction risk scan failure (${riskScanResult.riskSummary})"
         else -> "BlockAccountingFastPath verified safe"
     }
 )
@@ -38,6 +39,10 @@ class CompatibilityValidator(
     private val censusProvider: () -> ListenerCensusResult = { ListenerCensus(logger).performCensus() },
     private val riskScannerProvider: () -> TransactionRiskReport = { TransactionRiskScanner(logger).scan() }
 ) {
+    @Volatile
+    var lastReport: FullValidationReport? = null
+        private set
+
     fun runValidation(): FullValidationReport {
         logger?.info("[Optimizer] Running runtime validation suite...")
 
@@ -64,12 +69,16 @@ class CompatibilityValidator(
             "Runtime incompatible"
         }
 
-        val moduleBEligible = compatible && !riskReport.hasHighRiskExternalListeners
+        val moduleBEligible = compatible && (riskReport.state == TransactionRiskState.CLEAN)
         val moduleBReason = when {
             !compatible -> "Runtime incompatible"
-            riskReport.hasHighRiskExternalListeners -> {
+            riskReport.state == TransactionRiskState.RISK_FOUND -> {
                 logger?.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: transaction risk detected on CuboidWandUseEvent (${riskReport.riskSummary})")
                 "Refused due to transaction risk (${riskReport.riskSummary})"
+            }
+            riskReport.state == TransactionRiskState.SCAN_FAILED -> {
+                logger?.warning("[Optimizer] Module B (BlockAccountingFastPath) refused: transaction risk scan failed (${riskReport.riskSummary})")
+                "Refused due to transaction risk scan failure (${riskReport.riskSummary})"
             }
             else -> "BlockAccountingFastPath verified safe"
         }
@@ -80,7 +89,7 @@ class CompatibilityValidator(
             else -> OperatingMode.VALIDATED
         }
 
-        return FullValidationReport(
+        val report = FullValidationReport(
             fingerprintResult = fingerprint,
             listenerCensusResult = census,
             riskScanResult = riskReport,
@@ -91,5 +100,8 @@ class CompatibilityValidator(
             moduleBEligible = moduleBEligible,
             moduleBReason = moduleBReason
         )
+
+        lastReport = report
+        return report
     }
 }

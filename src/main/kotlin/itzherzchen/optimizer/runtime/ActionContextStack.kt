@@ -26,7 +26,7 @@ class ActionContextStack(
         try {
             Bukkit.isPrimaryThread()
         } catch (_: Throwable) {
-            true
+            false
         }
     }
 ) {

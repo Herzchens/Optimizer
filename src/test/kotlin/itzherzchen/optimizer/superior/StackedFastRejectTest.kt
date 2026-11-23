@@ -311,13 +311,14 @@ class StackedFastRejectTest {
     @Test
     fun `observe mode preserves original callback`() {
         pushContext()
-        modeController.transitionTo(OperatingMode.OBSERVE, "Test observe")
+        val observeController = ModeController(OperatingMode.OBSERVE)
+        val observeBreaker = CircuitBreaker(observeController)
         val (origRL, mockExecutor) = createRegisteredListener()
 
         val fastReject = StackedFastReject(
             config = config,
-            modeController = modeController,
-            circuitBreaker = circuitBreaker,
+            modeController = observeController,
+            circuitBreaker = observeBreaker,
             actionContextStack = stack,
             counters = counters,
             primaryThreadChecker = { isPrimaryThread },

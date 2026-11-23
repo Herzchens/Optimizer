@@ -48,8 +48,33 @@ class WildToolsBridge(
     var isHooked: Boolean = false
         private set
 
+    var dependencyIdentity: DependencyIdentitySnapshot? = null
+
     init {
         actionTracker.integrityChecker = { verifyIntegrity() == PreflightResult.OK }
+    }
+
+    /**
+     * Captures exact dependency instance, classloader, handler and list identities for preflight validation.
+     */
+    fun captureDependencies(): DependencyIdentitySnapshot? {
+        val pm = try { Bukkit.getPluginManager() } catch (_: Throwable) { null } ?: return null
+        val wt = try { pm.getPlugin("WildTools") } catch (_: Throwable) { null } ?: return null
+        val ssb = try { pm.getPlugin("SuperiorSkyblock2") } catch (_: Throwable) { null } ?: return null
+        val getEventsMethod = try { wt.javaClass.getMethod("getEvents") } catch (_: Throwable) { null } ?: return null
+        val eventsHandler = try { getEventsMethod.invoke(wt) } catch (_: Throwable) { null } ?: return null
+        val targetList = getClaimingPluginsBreakMethods(wt) ?: return null
+
+        val snapshot = DependencyIdentitySnapshot(
+            wildToolsPlugin = wt,
+            wildToolsClassLoader = wt.javaClass.classLoader,
+            superiorSkyblockPlugin = ssb,
+            superiorSkyblockClassLoader = ssb.javaClass.classLoader,
+            eventsHandler = eventsHandler,
+            targetList = targetList
+        )
+        dependencyIdentity = snapshot
+        return snapshot
     }
 
     /**
@@ -91,6 +116,7 @@ class WildToolsBridge(
         val result = listenerInstaller.install(rawList, censusResult)
         if (result == InstallResult.SUCCESS) {
             isHooked = true
+            captureDependencies()
             logger?.info("[Optimizer] WildTools synthetic break wrappers successfully installed.")
             return true
         } else {
@@ -116,6 +142,7 @@ class WildToolsBridge(
      * Evaluates live identity before root actions:
      * - installed wrapper identities occupy expected slots
      * - required dependencies remain enabled
+     * - exact dependency plugin instances and classloaders match captured snapshot
      * - expected live listener state still exists
      * - integration has not been externally replaced/reloaded
      */
@@ -144,7 +171,22 @@ class WildToolsBridge(
             return PreflightResult.FAILED_DEPENDENCY_DISABLED
         }
 
-        // 2. Integration replaced / reloaded check
+        // 2. Exact dependency instance and classloader verification
+        val snapshot = dependencyIdentity
+        if (snapshot != null) {
+            val identityResult = snapshot.verify()
+            if (identityResult != IdentityVerificationResult.OK) {
+                counters.validationFailures.increment()
+                circuitBreaker.trip(
+                    itzherzchen.optimizer.runtime.ModuleType.GLOBAL,
+                    "Dependency identity drift detected ($identityResult). Disarming system."
+                )
+                disarm("Dependency identity drift: $identityResult")
+                return PreflightResult.FAILED_INTEGRATION_REPLACED
+            }
+        }
+
+        // 3. Integration replaced / reloaded check
         val currentLiveList = listProvider()
         if (currentLiveList == null || currentLiveList !== listenerInstaller.targetList) {
             counters.validationFailures.increment()
@@ -156,7 +198,7 @@ class WildToolsBridge(
             return PreflightResult.FAILED_INTEGRATION_REPLACED
         }
 
-        // 3. Wrapper identities occupy expected slots & live listener state intact
+        // 4. Wrapper identities occupy expected slots & live listener state intact
         val result = listenerInstaller.verifyIntegrity()
         if (result != PreflightResult.OK) {
             counters.validationFailures.increment()

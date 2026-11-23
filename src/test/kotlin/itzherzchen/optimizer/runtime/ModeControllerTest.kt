@@ -28,12 +28,56 @@ class ModeControllerTest {
     }
 
     @Test
-    fun `transition to ACTIVE succeeds during boot phase`() {
+    fun `transition to ACTIVE succeeds from VALIDATED during boot phase`() {
         val controller = ModeController()
+        assertTrue(controller.transitionTo(OperatingMode.VALIDATED, "Tests passed"))
         val success = controller.transitionTo(OperatingMode.ACTIVE, "Boot config allowed")
         assertTrue(success)
         assertEquals(OperatingMode.ACTIVE, controller.mode)
         assertTrue(controller.mode.allowsFastPath)
+    }
+
+    @Test
+    fun `direct transition from OBSERVE to ACTIVE is strictly rejected`() {
+        val controller = ModeController(OperatingMode.OBSERVE)
+        val success = controller.transitionTo(OperatingMode.ACTIVE, "Direct arming attempt")
+        assertFalse(success)
+        assertEquals(OperatingMode.OBSERVE, controller.mode)
+    }
+
+    @Test
+    fun `backward transitions from ACTIVE are rejected`() {
+        val controller = ModeController(OperatingMode.ACTIVE)
+
+        assertFalse(controller.transitionTo(OperatingMode.OBSERVE, "Rollback to OBSERVE"))
+        assertEquals(OperatingMode.ACTIVE, controller.mode)
+
+        assertFalse(controller.transitionTo(OperatingMode.VALIDATED, "Rollback to VALIDATED"))
+        assertEquals(OperatingMode.ACTIVE, controller.mode)
+    }
+
+    @Test
+    fun `disarm is genuinely idempotent with first reason retained and listeners notified once`() {
+        val controller = ModeController(OperatingMode.OBSERVE)
+        val listenerInvocationCount = AtomicInteger(0)
+
+        controller.addDisarmListener {
+            listenerInvocationCount.incrementAndGet()
+        }
+
+        // First disarm call
+        assertTrue(controller.disarm("Initial primary fault", "CIRCUIT_BREAKER"))
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, controller.mode)
+        assertEquals("[CIRCUIT_BREAKER] Initial primary fault", controller.reason)
+        assertEquals(1, listenerInvocationCount.get())
+
+        // Repeated disarm call (e.g. from manual command or double-trip)
+        assertTrue(controller.disarm("Second secondary fault", "OPERATOR"))
+        assertEquals(OperatingMode.DISARMED_RESTART_REQUIRED, controller.mode)
+        // INVARIANT: First disarm reason MUST be retained forever for forensic audit!
+        assertEquals("[CIRCUIT_BREAKER] Initial primary fault", controller.reason)
+        // INVARIANT: Listeners MUST NOT be invoked a second time!
+        assertEquals(1, listenerInvocationCount.get())
     }
 
     @Test

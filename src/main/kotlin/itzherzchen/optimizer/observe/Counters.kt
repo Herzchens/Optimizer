@@ -8,6 +8,8 @@ import java.util.concurrent.atomic.LongAdder
  */
 class Counters {
     val cuboidActions = LongAdder()
+    val cuboidRootCandidates = LongAdder()
+    val cuboidRootCompleted = LongAdder()
     val syntheticBreaks = LongAdder()
     val stackedFastRejects = LongAdder()
     val stackedPassthroughs = LongAdder()
@@ -23,6 +25,8 @@ class Counters {
 
     data class Snapshot(
         val cuboidActions: Long,
+        val cuboidRootCandidates: Long,
+        val cuboidRootCompleted: Long,
         val syntheticBreaks: Long,
         val stackedFastRejects: Long,
         val stackedPassthroughs: Long,
@@ -39,6 +43,8 @@ class Counters {
 
     fun snapshot(): Snapshot = Snapshot(
         cuboidActions = cuboidActions.sum(),
+        cuboidRootCandidates = cuboidRootCandidates.sum(),
+        cuboidRootCompleted = cuboidRootCompleted.sum(),
         syntheticBreaks = syntheticBreaks.sum(),
         stackedFastRejects = stackedFastRejects.sum(),
         stackedPassthroughs = stackedPassthroughs.sum(),
@@ -55,6 +61,8 @@ class Counters {
 
     fun reset() {
         cuboidActions.reset()
+        cuboidRootCandidates.reset()
+        cuboidRootCompleted.reset()
         syntheticBreaks.reset()
         stackedFastRejects.reset()
         stackedPassthroughs.reset()
