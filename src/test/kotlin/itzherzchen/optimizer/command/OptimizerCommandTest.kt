@@ -194,10 +194,57 @@ class OptimizerCommandTest {
         val bukkitCmd = mock(Command::class.java)
 
         val completions = command.onTabComplete(sender, bukkitCmd, "hpg", arrayOf("s"))
-        assertEquals(listOf("status", "stats"), completions)
+        assertEquals(listOf("status", "stats", "staging"), completions)
 
         val emptyQueryCompletions = command.onTabComplete(sender, bukkitCmd, "hpg", arrayOf(""))
-        assertEquals(listOf("status", "validate", "stats", "disarm"), emptyQueryCompletions)
+        assertEquals(listOf("status", "validate", "stats", "staging", "disarm"), emptyQueryCompletions)
+
+        val stagingSubCompletions = command.onTabComplete(sender, bukkitCmd, "hpg", arrayOf("staging", ""))
+        assertEquals(listOf("run", "matrix"), stagingSubCompletions)
+    }
+
+    @Test
+    fun `staging subcommand executes rollout validation matrix`() {
+        val modeController = ModeController()
+        val breaker = CircuitBreaker(modeController)
+        val counters = Counters()
+        val timing = SampledTiming()
+        val validator = mock(CompatibilityValidator::class.java)
+
+        val command = OptimizerCommand(modeController, breaker, counters, timing, validator)
+
+        val sender = mock(CommandSender::class.java)
+        `when`(sender.hasPermission("optimizer.admin")).thenReturn(true)
+        val bukkitCmd = mock(Command::class.java)
+
+        val result = command.onCommand(sender, bukkitCmd, "hpg", arrayOf("staging", "run"))
+        assertTrue(result)
+
+        val messages = captureMessages(sender)
+        assertTrue(messages.any { it.contains("Running Staging Equivalence Matrix") })
+        assertTrue(messages.any { it.contains("Rollout Decision") })
+    }
+
+    @Test
+    fun `staging matrix subcommand displays matrix groups`() {
+        val modeController = ModeController()
+        val breaker = CircuitBreaker(modeController)
+        val counters = Counters()
+        val timing = SampledTiming()
+        val validator = mock(CompatibilityValidator::class.java)
+
+        val command = OptimizerCommand(modeController, breaker, counters, timing, validator)
+
+        val sender = mock(CommandSender::class.java)
+        `when`(sender.hasPermission("optimizer.admin")).thenReturn(true)
+        val bukkitCmd = mock(Command::class.java)
+
+        val result = command.onCommand(sender, bukkitCmd, "hpg", arrayOf("staging", "matrix"))
+        assertTrue(result)
+
+        val messages = captureMessages(sender)
+        assertTrue(messages.any { it.contains("Optimizer Equivalence Matrix Groups") })
+        assertTrue(messages.any { it.contains("Cuboid Workload") })
     }
 
     @Test

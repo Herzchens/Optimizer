@@ -26,7 +26,8 @@ class OptimizerCommand(
     private val counters: Counters,
     private val timing: SampledTiming,
     private val validator: CompatibilityValidator,
-    private val wildToolsBridge: itzherzchen.optimizer.wildtools.WildToolsBridge? = null
+    private val wildToolsBridge: itzherzchen.optimizer.wildtools.WildToolsBridge? = null,
+    private val rolloutValidator: itzherzchen.optimizer.staging.RolloutValidator = itzherzchen.optimizer.staging.RolloutValidator()
 ) : CommandExecutor, TabCompleter {
 
     override fun onCommand(
@@ -47,6 +48,7 @@ class OptimizerCommand(
             "validate" -> handleValidate(sender)
             "stats" -> handleStats(sender)
             "disarm" -> handleDisarm(sender)
+            "staging", "rollout" -> handleStaging(sender, args)
             else -> {
                 sender.sendMessage(Component.text("--- Optimizer Commands ---", NamedTextColor.GOLD))
                 sender.sendMessage(Component.text("/$label status ", NamedTextColor.YELLOW)
@@ -55,6 +57,8 @@ class OptimizerCommand(
                     .append(Component.text("- Run read-only runtime invariant validation", NamedTextColor.GRAY)))
                 sender.sendMessage(Component.text("/$label stats ", NamedTextColor.YELLOW)
                     .append(Component.text("- View performance counters and sampled latency", NamedTextColor.GRAY)))
+                sender.sendMessage(Component.text("/$label staging ", NamedTextColor.YELLOW)
+                    .append(Component.text("- Run staging equivalence matrix and rollout validation", NamedTextColor.GRAY)))
                 sender.sendMessage(Component.text("/$label disarm ", NamedTextColor.YELLOW)
                     .append(Component.text("- Emergency fail-closed shutdown (requires restart)", NamedTextColor.GRAY)))
             }
@@ -168,6 +172,51 @@ class OptimizerCommand(
         sender.sendMessage(Component.text("[Optimizer] All fast paths are disabled. A clean server restart is required to re-evaluate.", NamedTextColor.RED))
     }
 
+    private fun handleStaging(sender: CommandSender, args: Array<out String>) {
+        if (args.size > 1 && args[1].equals("matrix", ignoreCase = true)) {
+            sender.sendMessage(Component.text("=== Optimizer Equivalence Matrix Groups ===", NamedTextColor.GOLD))
+            for (group in itzherzchen.optimizer.staging.MatrixGroup.values()) {
+                sender.sendMessage(Component.text("  - ${group.title}: ", NamedTextColor.YELLOW)
+                    .append(Component.text(group.description, NamedTextColor.GRAY)))
+            }
+            return
+        }
+
+        sender.sendMessage(Component.text("=== Running Staging Equivalence Matrix ===", NamedTextColor.GOLD))
+        val report = rolloutValidator.runValidationMatrix()
+
+        for ((group, groupRes) in report.groupResults) {
+            val color = when (groupRes.status) {
+                itzherzchen.optimizer.staging.TestStatus.PASS -> NamedTextColor.GREEN
+                itzherzchen.optimizer.staging.TestStatus.WARN -> NamedTextColor.YELLOW
+                itzherzchen.optimizer.staging.TestStatus.FAIL -> NamedTextColor.RED
+            }
+            sender.sendMessage(Component.text("  [${groupRes.status}] ", color)
+                .append(Component.text("${group.title} ", NamedTextColor.WHITE))
+                .append(Component.text("(${groupRes.passedCount}/${groupRes.totalCount} passed)", NamedTextColor.GRAY)))
+
+            for (caseRes in groupRes.caseResults) {
+                if (caseRes.status != itzherzchen.optimizer.staging.TestStatus.PASS) {
+                    val cColor = if (caseRes.status == itzherzchen.optimizer.staging.TestStatus.WARN) NamedTextColor.YELLOW else NamedTextColor.RED
+                    sender.sendMessage(Component.text("    - [${caseRes.caseId}] ${caseRes.name}: ${caseRes.details}", cColor))
+                }
+            }
+        }
+
+        val decisionColor = when (report.decision) {
+            itzherzchen.optimizer.staging.RolloutDecision.GO_V03_ACTIVE_B -> NamedTextColor.GREEN
+            itzherzchen.optimizer.staging.RolloutDecision.GO_V02_ACTIVE_A -> NamedTextColor.AQUA
+            itzherzchen.optimizer.staging.RolloutDecision.GO_V01_OBSERVE -> NamedTextColor.YELLOW
+            itzherzchen.optimizer.staging.RolloutDecision.NO_GO -> NamedTextColor.RED
+        }
+
+        sender.sendMessage(Component.text("Rollout Decision: ", NamedTextColor.GOLD)
+            .append(Component.text(report.decision.name, decisionColor)))
+        sender.sendMessage(Component.text("Summary: ", NamedTextColor.GRAY)
+            .append(Component.text(report.summary, NamedTextColor.WHITE)))
+        sender.sendMessage(Component.text("Results: ${report.passedTests}/${report.totalTests} passed (${report.warningTests} warn, ${report.failedTests} fail) in ${report.totalTimeMs}ms", NamedTextColor.GRAY))
+    }
+
     override fun onTabComplete(
         sender: CommandSender,
         command: Command,
@@ -177,7 +226,11 @@ class OptimizerCommand(
         if (!sender.hasPermission("optimizer.admin")) return emptyList()
         if (args.size == 1) {
             val query = args[0].lowercase()
-            return listOf("status", "validate", "stats", "disarm").filter { it.startsWith(query) }
+            return listOf("status", "validate", "stats", "staging", "disarm").filter { it.startsWith(query) }
+        }
+        if (args.size == 2 && (args[0].equals("staging", ignoreCase = true) || args[0].equals("rollout", ignoreCase = true))) {
+            val query = args[1].lowercase()
+            return listOf("run", "matrix").filter { it.startsWith(query) }
         }
         return emptyList()
     }

@@ -135,13 +135,22 @@ class OptimizerPlugin : JavaPlugin() {
         )
 
         // 5. Command Registration
+        val rolloutValidator = itzherzchen.optimizer.staging.RolloutValidator(
+            config = optimizerConfig,
+            modeController = modeController,
+            circuitBreaker = circuitBreaker,
+            counters = counters,
+            validator = compatibilityValidator,
+            logger = logger
+        )
         val cmd = OptimizerCommand(
             modeController,
             circuitBreaker,
             counters,
             timing,
             compatibilityValidator,
-            wildToolsBridge
+            wildToolsBridge,
+            rolloutValidator
         )
         val pluginCmd = getCommand("optimizer")
         if (pluginCmd != null) {
